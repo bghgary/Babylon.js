@@ -120,7 +120,7 @@ module BABYLON {
     }
 
     export interface IGLTFAnimationChannelTarget {
-        id: number;
+        node: number;
         path: string;
     }
 
@@ -131,8 +131,8 @@ module BABYLON {
     }
 
     export interface IGLTFAnimation extends IGLTFChildRootProperty {
-        channels?: IGLTFAnimationChannel[];
-        samplers?: IGLTFAnimationSampler[];
+        channels: IGLTFAnimationChannel[];
+        samplers: IGLTFAnimationSampler[];
     }
 
     export interface IGLTFAssetProfile extends IGLTFProperty {

@@ -44,7 +44,7 @@ module BABYLON {
 
         for (var animationIndex = 0; animationIndex < animations.length; animationIndex++) {
             var animation = animations[animationIndex];
-            if (!animation || !animation.channels) {
+            if (!animation || !animation.channels || !animation.samplers) {
                 continue;
             }
 
@@ -67,8 +67,8 @@ module BABYLON {
                 var bufferInput = GLTFUtils.GetBufferFromAccessor(runtime, runtime.gltf.accessors[inputData]);
                 var bufferOutput = GLTFUtils.GetBufferFromAccessor(runtime, runtime.gltf.accessors[outputData]);
 
-                var targetID = channel.target.id;
-                var targetNode: any = runtime.gltf.nodes[channel.target.id].babylonNode;
+                var targetID = channel.target.node;
+                var targetNode: any = runtime.gltf.nodes[channel.target.node].babylonNode;
                 if (targetNode === null) {
                     Tools.Warn("Creating animation index " + animationIndex + " but cannot find node index " + targetID + " to attach to");
                     continue;
@@ -599,7 +599,10 @@ module BABYLON {
             tempVertexData = undefined;
 
             // Sub material
-            var material = runtime.gltf.materials[primitive.material].babylonMaterial;
+            var material = undefined;
+            if (runtime.gltf.materials) {
+                material = runtime.gltf.materials[primitive.material].babylonMaterial;
+            }
             multiMat.subMaterials.push(material === undefined ? GLTFUtils.GetDefaultMaterial(runtime.babylonScene) : material);
 
             // Update vertices start and index start
@@ -822,8 +825,10 @@ module BABYLON {
     };
 
     var importMaterials = (runtime: IGLTFRuntime): void => {
-        for (var i = 0; i < runtime.gltf.materials.length; i++) {
-            GLTFFileLoaderExtension.LoadMaterial(runtime, i);
+        if (runtime.gltf.materials) {
+            for (var i = 0; i < runtime.gltf.materials.length; i++) {
+                GLTFFileLoaderExtension.LoadMaterial(runtime, i);
+            }
         }
     };
 
