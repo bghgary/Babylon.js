@@ -147,10 +147,6 @@ module BABYLON {
                         }
                         else if (targetPath === "rotationQuaternion") {
                             rotationQuaternion = value;
-                            // // Y is Up
-                            // if (GLTFFileLoader.MakeYUP) {
-                            //     rotationQuaternion = rotationQuaternion.multiply(new Quaternion(-0.707107, 0, 0, 0.707107));
-                            // }
                         }
                         else {
                             scaling = value;
@@ -720,7 +716,6 @@ module BABYLON {
             node.babylonNode = dummy;
             babylonNode = dummy;
         }
-        // end do this
 
         if (babylonNode !== null) {
             configureNode(babylonNode, node);
@@ -758,7 +753,6 @@ module BABYLON {
                 newNode.parent = parent;
             }
         }
-        // end do this
 
         if (node.children) {
             for (var i = 0; i < node.children.length; i++) {
