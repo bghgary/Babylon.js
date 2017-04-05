@@ -17,6 +17,12 @@ module BABYLON {
         FLOAT = 5126
     }
 
+    export enum EIndicesComponentType {
+        UNSIGNED_BYTE = 5121,
+        UNSIGNED_SHORT = 5123,
+        UNSIGNED_INT = 5125
+    }
+
     export enum EMeshPrimitiveMode {
         POINTS = 0,
         LINES = 1,
@@ -102,16 +108,33 @@ module BABYLON {
         name?: string;
     }
 
-    export interface IGLTFAccessor extends IGLTFChildRootProperty {
+    export interface IGLTFAccessorSparseIndices {
         bufferView: number;
-        byteOffset: number;
-        byteStride?: number;
+        byteOffset?: number;
+        componentType: EIndicesComponentType;
+    }
+
+    export interface IGLTFAccessorSparseValues {
+        bufferView: number;
+        byteOffset?: number;
+    }
+
+    export interface IGLTFAccessorSparse extends IGLTFProperty {
+        count: number;
+        indices: IGLTFAccessorSparseIndices;
+        values: IGLTFAccessorSparseValues;
+    }
+
+    export interface IGLTFAccessor extends IGLTFChildRootProperty {
+        bufferView?: number;
+        byteOffset?: number;
         componentType: EComponentType;
         normalized?: boolean;
         count: number;
         type: string;
         max: number[];
         min: number[];
+        sparse?: IGLTFAccessorSparse;
     }
 
     export interface IGLTFAnimationChannel {
@@ -159,6 +182,7 @@ module BABYLON {
         buffer: number;
         byteOffset: number;
         byteLength: number;
+        byteStride?: number;
         target?: EBufferViewTarget;
     }
 
@@ -222,23 +246,24 @@ module BABYLON {
         indices?: number;
         material?: number;
         mode?: EMeshPrimitiveMode;
+        targets?: number[];
     }
 
     export interface IGLTFMesh extends IGLTFChildRootProperty {
         primitives: IGLTFMeshPrimitive[];
+        weights?: number[];
     }
 
     export interface IGLTFNode extends IGLTFChildRootProperty {
         camera?: number;
         children?: number[];
-        skeletons?: number[];
         skin?: number;
-        jointName?: number;
-        matrix: number[];
+        matrix?: number[];
         mesh?: number;
         rotation?: number[];
         scale?: number[];
         translation?: number[];
+        weights?: number[];
 
         // Babylon.js values (optimize)
         babylonNode?: Node;
@@ -256,10 +281,11 @@ module BABYLON {
     }
 
     export interface IGLTFSkin extends IGLTFChildRootProperty {
-        bindShapeMatrix?: number[];
         inverseBindMatrices?: number;
-        jointNames: number[];
+        skeleton?: number;
+        joints: number[];
 
+        // Babylon.js values (optimize)
         babylonSkeleton?: Skeleton;
     }
 
@@ -319,11 +345,11 @@ module BABYLON {
     export interface INodeToRoot {
         bone: Bone;
         node: IGLTFNode;
-        id: string;
+        id: number;
     }
 
     export interface IJointNode {
         node: IGLTFNode;
-        id: string;
+        id: number;
     }
 }
