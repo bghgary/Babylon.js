@@ -20,6 +20,10 @@ module BABYLON {
         }
     };
 
+    var createStringId = (index: number): string => {
+        return "node" + index;
+    };
+
     /**
     * Returns the animation path (glTF -> Babylon)
     */
@@ -68,7 +72,7 @@ module BABYLON {
                 var bufferOutput = GLTFUtils.GetBufferFromAccessor(runtime, runtime.gltf.accessors[outputData]);
 
                 var targetID = channel.target.node;
-                var targetNode: any = runtime.babylonScene.getNodeByID("node" + targetID);
+                var targetNode: any = runtime.babylonScene.getNodeByID(createStringId(targetID));
 
                 if (targetNode === null) {
                     Tools.Warn("Creating animation index " + animationIndex + " but cannot find node index " + targetID + " to attach to");
@@ -194,7 +198,7 @@ module BABYLON {
             mat = Matrix.Compose(scale, rotation, position);
         }
         else {
-            mat = Matrix.FromArray(node.matrix || [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+            mat = node.matrix ? Matrix.FromArray(node.matrix) : Matrix.Identity();
         }
 
         return mat;
@@ -203,9 +207,9 @@ module BABYLON {
     /**
     * Returns the parent bone
     */
-    var getParentBone = (runtime: IGLTFRuntime, skin: IGLTFSkin, nodeID: number, newSkeleton: Skeleton): Bone => {
+    var getParentBone = (runtime: IGLTFRuntime, skin: IGLTFSkin, index: number, newSkeleton: Skeleton): Bone => {
         // Try to find
-        var nodeStringID = "node" + nodeID;
+        var nodeStringID = createStringId(index);
         for (var i = 0; i < newSkeleton.bones.length; i++) {
             if (newSkeleton.bones[i].id === nodeStringID) {
                 return newSkeleton.bones[i].getParent();
@@ -226,11 +230,11 @@ module BABYLON {
                     continue;
                 }
 
-                if (childID === nodeID)
+                if (childID === index)
                 {
                     var mat = configureBoneTransformation(parent);
-                    var bone = new Bone(parent.name || "node" + parentID, newSkeleton, getParentBone(runtime, skin, parentID, newSkeleton), mat);
-                    bone.id = "node" + parentID;
+                    var bone = new Bone(parent.name || createStringId(parentID), newSkeleton, getParentBone(runtime, skin, parentID, newSkeleton), mat);
+                    bone.id = createStringId(parentID);
                     return bone;
                 }
             }
@@ -242,14 +246,14 @@ module BABYLON {
     /**
     * Returns the appropriate root node
     */
-    var getNodeToRoot = (nodesToRoot: INodeToRoot[], id: number): Bone => {
+    var getNodeToRoot = (nodesToRoot: INodeToRoot[], index: number): Bone => {
         for (var i = 0; i < nodesToRoot.length; i++) {
             var nodeToRoot = nodesToRoot[i];
 
             if (nodeToRoot.node.children) {
                 for (var j = 0; j < nodeToRoot.node.children.length; j++) {
                     var child = nodeToRoot.node.children[j];
-                    if (child === id) {
+                    if (child === index) {
                         return nodeToRoot.bone;
                     }
                 }
@@ -262,12 +266,12 @@ module BABYLON {
     /**
     * Returns the node with the node index
     */
-    var getJointNode = (runtime: IGLTFRuntime, nodeID: number): IJointNode => {
-        var node = runtime.gltf.nodes[nodeID];
+    var getJointNode = (runtime: IGLTFRuntime, index: number): IJointNode => {
+        var node = runtime.gltf.nodes[index];
         if (node) {
             return {
                 node: node,
-                id: nodeID
+                index: index
             };
         }
 
@@ -277,9 +281,9 @@ module BABYLON {
     /**
     * Checks if a nodes is in joints
     */
-    var nodeIsInJoints = (skin: IGLTFSkin, id: number): boolean => {
+    var nodeIsInJoints = (skin: IGLTFSkin, index: number): boolean => {
         for (var i = 0; i < skin.joints.length; i++) {
-            if (skin.joints[i] === id) {
+            if (skin.joints[i] === index) {
                 return true;
             }
         }
@@ -301,9 +305,9 @@ module BABYLON {
 
             // Create node to root bone
             var mat = configureBoneTransformation(node);
-            var bone = new Bone(node.name || "node" + i, newSkeleton, null, mat);
-            bone.id = "node" + i;
-            nodesToRoot.push({ bone: bone, node: node, id: i });
+            var bone = new Bone(node.name || createStringId(i), newSkeleton, null, mat);
+            bone.id = createStringId(i);
+            nodesToRoot.push({ bone: bone, node: node, index: i });
         }
 
         // Parenting
@@ -316,7 +320,7 @@ module BABYLON {
                     var child: INodeToRoot = null;
 
                     for (var k = 0; k < nodesToRoot.length; k++) {
-                        if (nodesToRoot[k].id === children[j]) {
+                        if (nodesToRoot[k].index === children[j]) {
                             child = nodesToRoot[k];
                             break;
                         }
@@ -334,7 +338,6 @@ module BABYLON {
     /**
     * Imports a skeleton
     */
-    //var importSkeleton = (runtime: IGLTFRuntime, skin: IGLTFSkin, newSkeleton: Skeleton, skinID: number): Skeleton => {
     var importSkeleton = (runtime: IGLTFRuntime, skinNode: IGLTFNode, skin: IGLTFSkin): Skeleton => {
         var name = skin.name || "skin" + skinNode.skin;
 
@@ -368,8 +371,8 @@ module BABYLON {
                 continue;
             }
 
-            var id = jointNode.id;
-            var stringID = "node" + id;
+            var index = jointNode.index;
+            var stringID = createStringId(index);
 
             // Optimize, if the bone already exists...
             var existingBone = runtime.babylonScene.getBoneByID(stringID);
@@ -394,7 +397,7 @@ module BABYLON {
                 foundBone = false;
 
                 for (var k = 0; k < children.length; k++) {
-                    if (children[k] === id) {
+                    if (children[k] === index) {
                         parentBone = getParentBone(runtime, skin, skin.joints[j], babylonSkeleton);
                         foundBone = true;
                         break;
@@ -410,7 +413,7 @@ module BABYLON {
             var mat = configureBoneTransformation(node);
 
             if (!parentBone && nodesToRoot.length > 0) {
-                parentBone = getNodeToRoot(nodesToRoot, id);
+                parentBone = getNodeToRoot(nodesToRoot, index);
 
                 if (parentBone) {
                     if (nodesToRootToAdd.indexOf(parentBone) === -1) {
@@ -434,8 +437,9 @@ module BABYLON {
                 continue;
             }
 
+            var jointNodeStringId = createStringId(jointNode.index);
             for (var j = 0; j < bones.length; j++) {
-                if (bones[j].id === "node" + jointNode.id) {
+                if (bones[j].id === jointNodeStringId) {
                     babylonSkeleton.bones.push(bones[j]);
                     break;
                 }
@@ -677,7 +681,7 @@ module BABYLON {
         else if (node.camera !== undefined && !node.babylonNode && !runtime.importOnlyMeshes) {
             var camera = runtime.gltf.cameras[node.camera];
 
-            if (camera != undefined) {
+            if (camera !== undefined) {
                 if (camera.type === "orthographic") {
                     var orthographicCamera = camera.orthographic;
                     var orthoCamera = new FreeCamera(node.name || "camera" + node.camera, Vector3.Zero(), runtime.babylonScene);
@@ -749,7 +753,7 @@ module BABYLON {
             newNode = importNode(runtime, node);
 
             if (newNode !== null) {
-                newNode.id = "node" + index;
+                newNode.id = createStringId(index);
                 newNode.parent = parent;
             }
         }

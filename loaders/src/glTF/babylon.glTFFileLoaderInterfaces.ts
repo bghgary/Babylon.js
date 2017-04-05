@@ -17,12 +17,6 @@ module BABYLON {
         FLOAT = 5126
     }
 
-    export enum EIndicesComponentType {
-        UNSIGNED_BYTE = 5121,
-        UNSIGNED_SHORT = 5123,
-        UNSIGNED_INT = 5125
-    }
-
     export enum EMeshPrimitiveMode {
         POINTS = 0,
         LINES = 1,
@@ -108,13 +102,13 @@ module BABYLON {
         name?: string;
     }
 
-    export interface IGLTFAccessorSparseIndices {
+    export interface IGLTFAccessorSparseIndices extends IGLTFProperty {
         bufferView: number;
         byteOffset?: number;
-        componentType: EIndicesComponentType;
+        componentType: EComponentType;
     }
 
-    export interface IGLTFAccessorSparseValues {
+    export interface IGLTFAccessorSparseValues extends IGLTFProperty {
         bufferView: number;
         byteOffset?: number;
     }
@@ -137,17 +131,17 @@ module BABYLON {
         sparse?: IGLTFAccessorSparse;
     }
 
-    export interface IGLTFAnimationChannel {
+    export interface IGLTFAnimationChannel extends IGLTFProperty {
         sampler: number;
         target: IGLTFAnimationChannelTarget;
     }
 
-    export interface IGLTFAnimationChannelTarget {
+    export interface IGLTFAnimationChannelTarget extends IGLTFProperty {
         node: number;
         path: string;
     }
 
-    export interface IGLTFAnimationSampler {
+    export interface IGLTFAnimationSampler extends IGLTFProperty {
         input: number;
         interpolation?: string;
         output: number;
@@ -186,14 +180,14 @@ module BABYLON {
         target?: EBufferViewTarget;
     }
 
-    export interface IGLTFCameraOrthographic {
+    export interface IGLTFCameraOrthographic extends IGLTFProperty {
         xmag: number;
         ymag: number;
         zfar: number;
         znear: number;
     }
 
-    export interface IGLTFCameraPerspective {
+    export interface IGLTFCameraPerspective extends IGLTFProperty {
         aspectRatio: number;
         yfov: number;
         zfar: number;
@@ -345,11 +339,11 @@ module BABYLON {
     export interface INodeToRoot {
         bone: Bone;
         node: IGLTFNode;
-        id: number;
+        index: number;
     }
 
     export interface IJointNode {
         node: IGLTFNode;
-        id: number;
+        index: number;
     }
 }
