@@ -641,7 +641,6 @@ module BABYLON {
         if (babylonNode instanceof Mesh) {
             var mesh = <Mesh>babylonNode;
             mesh.scaling = scaling;
-            mesh.computeWorldMatrix(true);
         }
     };
 
@@ -908,6 +907,7 @@ module BABYLON {
                 GLTFFileLoader.LoadTextureAsync(runtime, properties.metallicRoughnessTexture,
                     texture => {
                         material.babylonMaterial.metallicTexture = texture;
+                        material.babylonMaterial.useMetallicFromMetallicTextureBlue = true;
                         material.babylonMaterial.useRoughnessFromMetallicTextureGreen = true;
                         material.babylonMaterial.useRoughnessFromMetallicTextureAlpha = false;
                     },
@@ -930,6 +930,7 @@ module BABYLON {
             if (material.occlusionTexture) {
                 GLTFFileLoader.LoadTextureAsync(runtime, material.occlusionTexture, babylonTexture => {
                     material.babylonMaterial.ambientTexture = babylonTexture;
+                    material.babylonMaterial.useAmbientFromAmbientTextureRed = true;
                     if (material.occlusionTexture.strength !== undefined) {
                         material.babylonMaterial.ambientTextureStrength = material.occlusionTexture.strength;
                     }
@@ -942,6 +943,11 @@ module BABYLON {
                 GLTFFileLoader.LoadTextureAsync(runtime, material.emissiveTexture, babylonTexture => {
                     material.babylonMaterial.emissiveTexture = babylonTexture;
                 }, () => Tools.Warn("Failed to load normal texture"));
+            }
+
+            if (material.doubleSided) {
+                material.babylonMaterial.backFaceCulling = false;
+                material.babylonMaterial.twoSidedLighting = true;
             }
         }
 
@@ -1173,8 +1179,6 @@ module BABYLON {
                 rootUrl: rootUrl,
 
                 importOnlyMeshes: importOnlyMeshes,
-
-                dummyNodes: []
             }
 
             if (data instanceof ArrayBuffer) {

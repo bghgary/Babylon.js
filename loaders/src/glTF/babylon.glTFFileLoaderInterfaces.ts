@@ -230,6 +230,7 @@ module BABYLON {
         emissiveFactor?: number[];
         alphaMode?: string;
         alphaCutoff: number;
+        doubleSided?: boolean;
 
         // Babylon.js values (optimize)
         babylonMaterial?: PBRMaterial;
@@ -329,8 +330,6 @@ module BABYLON {
 
         importOnlyMeshes: boolean;
         importMeshesNames?: string[];
-
-        dummyNodes: Node[];
     }
 
     /**
