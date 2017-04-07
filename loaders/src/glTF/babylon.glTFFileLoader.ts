@@ -584,7 +584,7 @@ module BABYLON {
             if (runtime.gltf.materials && runtime.gltf.materials.length > 0) {
                 material = runtime.gltf.materials[primitive.material].babylonMaterial;
             }
-            multiMat.subMaterials.push(material === undefined ? GLTFUtils.GetDefaultMaterial(runtime.babylonScene) : material);
+            multiMat.subMaterials.push(material === undefined ? GLTFUtils.GetDefaultMaterial(runtime) : material);
 
             // Update vertices start and index start
             verticesStarts.push(verticesStarts.length === 0 ? 0 : verticesStarts[verticesStarts.length - 1] + verticesCounts[verticesCounts.length - 2]);

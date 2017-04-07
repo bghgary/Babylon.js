@@ -330,6 +330,8 @@ module BABYLON {
 
         importOnlyMeshes: boolean;
         importMeshesNames?: string[];
+
+        defaultMaterial: PBRMaterial;
     }
 
     /**
