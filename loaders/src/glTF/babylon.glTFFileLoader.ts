@@ -1179,6 +1179,8 @@ module BABYLON {
                 rootUrl: rootUrl,
 
                 importOnlyMeshes: importOnlyMeshes,
+
+                defaultMaterial: undefined
             }
 
             if (data instanceof ArrayBuffer) {
