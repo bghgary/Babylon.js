@@ -4,6 +4,7 @@ import type { ITexture } from "../glTFLoaderInterfaces";
 import type { BaseTexture } from "core/Materials/Textures/baseTexture";
 import type { Nullable } from "core/types";
 import type { IKHRTextureBasisU } from "babylonjs-gltf2interface";
+import type { IKTX2DecoderOptions } from "../../../../../../tools/ktx2Decoder/src/ktx2Decoder";
 
 const NAME = "KHR_texture_basisu";
 
@@ -19,6 +20,8 @@ export class KHR_texture_basisu implements IGLTFLoaderExtension {
     public enabled: boolean;
 
     private _loader: GLTFLoader;
+
+    public decoderOptions: IKTX2DecoderOptions = {};
 
     /**
      * @internal
@@ -40,16 +43,9 @@ export class KHR_texture_basisu implements IGLTFLoaderExtension {
         return GLTFLoader.LoadExtensionAsync<IKHRTextureBasisU, BaseTexture>(context, texture, this.name, (extensionContext, extension) => {
             const sampler = texture.sampler == undefined ? GLTFLoader.DefaultSampler : ArrayItem.Get(`${context}/sampler`, this._loader.gltf.samplers, texture.sampler);
             const image = ArrayItem.Get(`${extensionContext}/source`, this._loader.gltf.images, extension.source);
-            return this._loader._createTextureAsync(
-                context,
-                sampler,
-                image,
-                (babylonTexture) => {
-                    assign(babylonTexture);
-                },
-                texture._textureInfo.nonColorData ? { useRGBAIfASTCBC7NotAvailableWhenUASTC: true } : undefined,
-                !texture._textureInfo.nonColorData
-            );
+            const textureLoadOptions = texture._textureInfo.nonColorData ? { ...this.decoderOptions, useRGBAIfASTCBC7NotAvailableWhenUASTC: true } : this.decoderOptions;
+            const useSRGBBuffer = !texture._textureInfo.nonColorData;
+            return this._loader._createTextureAsync(context, sampler, image, assign, textureLoadOptions, useSRGBBuffer);
         });
     }
 }
