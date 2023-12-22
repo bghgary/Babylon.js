@@ -6,7 +6,6 @@ import type { Texture } from "core/Materials/Textures/texture";
 import type { SubMesh } from "core/Meshes/subMesh";
 import type { IDisposable } from "core/scene";
 
-import type { _BinaryWriter } from "./glTFExporter";
 import type { IGLTFExporterExtension } from "../glTFFileExporter";
 import type { Material } from "core/Materials/material";
 import type { BaseTexture } from "core/Materials/Textures/baseTexture";
@@ -42,19 +41,20 @@ export interface IGLTFExporterExtensionV2 extends IGLTFExporterExtension, IDispo
      * @param context The context when loading the asset
      * @param meshPrimitive glTF mesh primitive
      * @param babylonSubMesh Babylon submesh
-     * @param binaryWriter glTF serializer binary writer instance
+     * @param dataWriter glTF serializer data writer instance
      * @returns nullable IMeshPrimitive promise
      */
-    postExportMeshPrimitiveAsync?(context: string, meshPrimitive: Nullable<IMeshPrimitive>, babylonSubMesh: SubMesh, binaryWriter: _BinaryWriter): Promise<IMeshPrimitive>;
+    postExportMeshPrimitiveAsync?(context: string, meshPrimitive: Nullable<IMeshPrimitive>, babylonSubMesh: SubMesh): Promise<IMeshPrimitive>;
 
     /**
      * Define this method to modify the default behavior when exporting a node
      * @param context The context when exporting the node
      * @param node glTF node
      * @param babylonNode BabylonJS node
+     * @param dataWriter glTF serializer data writer instance
      * @returns nullable INode promise
      */
-    postExportNodeAsync?(context: string, node: Nullable<INode>, babylonNode: Node, nodeMap: { [key: number]: number }, binaryWriter: _BinaryWriter): Promise<Nullable<INode>>;
+    postExportNodeAsync?(context: string, node: Nullable<INode>, babylonNode: Node, nodeMap: { [key: number]: number }): Promise<Nullable<INode>>;
 
     /**
      * Define this method to modify the default behavior when exporting a material

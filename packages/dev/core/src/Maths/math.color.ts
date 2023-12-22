@@ -1,6 +1,6 @@
 import type { DeepImmutable, FloatArray } from "../types";
 import { Scalar } from "./math.scalar";
-import { ToLinearSpace, ToGammaSpace } from "./math.constants";
+import { ToLinearSpace, ToGammaSpace, Epsilon } from "./math.constants";
 import { ArrayTools } from "../Misc/arrayTools";
 import { RegisterClass } from "../Misc/typeStore";
 
@@ -159,6 +159,21 @@ export class Color3 {
      */
     public equals(otherColor: DeepImmutable<Color3>): boolean {
         return otherColor && this.r === otherColor.r && this.g === otherColor.g && this.b === otherColor.b;
+    }
+
+    /**
+     * Gets a boolean if two color are equals (using an epsilon value)
+     * @param otherColor defines the other vector
+     * @param epsilon defines the minimal distance to consider equality
+     * @returns true if the given colors are close to the current ones by a distance of epsilon.
+     */
+    public equalsWithEpsilon(otherVector: DeepImmutable<Color3>, epsilon: number = Epsilon): boolean {
+        return (
+            otherVector &&
+            Scalar.WithinEpsilon(this.r, otherVector.r, epsilon) &&
+            Scalar.WithinEpsilon(this.g, otherVector.g, epsilon) &&
+            Scalar.WithinEpsilon(this.b, otherVector.b, epsilon)
+        );
     }
 
     /**
