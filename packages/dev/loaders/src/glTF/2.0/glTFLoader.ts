@@ -1223,7 +1223,7 @@ export class GLTFLoader implements IGLTFLoader {
 
         loadAttribute("POSITION", VertexBuffer.PositionKind, (babylonVertexBuffer, data) => {
             const positions = new Float32Array(data.length);
-            babylonVertexBuffer.forEach(data.length, (value, index) => {
+            babylonVertexBuffer.forEach(positions.length, (value, index) => {
                 positions[index] = data[index] + value;
             });
 
@@ -1242,7 +1242,7 @@ export class GLTFLoader implements IGLTFLoader {
         loadAttribute("TANGENT", VertexBuffer.TangentKind, (babylonVertexBuffer, data) => {
             const tangents = new Float32Array((data.length / 3) * 4);
             let dataIndex = 0;
-            babylonVertexBuffer.forEach((data.length / 3) * 4, (value, index) => {
+            babylonVertexBuffer.forEach(tangents.length, (value, index) => {
                 // Tangent data for morph targets is stored as xyz delta.
                 // The vertexData.tangent is stored as xyzw.
                 // So we need to skip every fourth vertexData.tangent.

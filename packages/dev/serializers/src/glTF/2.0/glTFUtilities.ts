@@ -1,11 +1,19 @@
 import type { IBufferView, AccessorComponentType, IAccessor } from "babylonjs-gltf2interface";
 import { AccessorType, MeshPrimitiveMode } from "babylonjs-gltf2interface";
 
-import type { FloatArray, Nullable } from "core/types";
-import type { Quaternion, Vector4 } from "core/Maths/math.vector";
-import { Vector3 } from "core/Maths/math.vector";
+import type { DataArray, IndicesArray, Nullable } from "core/types";
+import { Quaternion, TmpVectors, Vector4 } from "core/Maths/math.vector";
+import { Matrix, Vector3 } from "core/Maths/math.vector";
 import { VertexBuffer } from "core/Buffers/buffer";
 import { Material } from "core/Materials/material";
+import { TransformNode } from "core/Meshes/transformNode";
+import { Mesh } from "core/Meshes/mesh";
+import { InstancedMesh } from "core/Meshes/instancedMesh";
+import { enumerateFloatValues } from "core/Buffers/bufferUtils";
+import type { Node } from "core/node";
+
+// Matrix that converts handedness on the X-axis.
+const convertHandednessMatrix = Matrix.Compose(new Vector3(-1, 1, 1), Quaternion.Identity(), Vector3.Zero());
 
 /**
  * Creates a buffer view based on the supplied arguments
@@ -16,15 +24,11 @@ import { Material } from "core/Materials/material";
  * @param name name of the buffer view
  * @returns bufferView for glTF
  */
-export function createBufferView(bufferIndex: number, byteOffset: number, byteLength: number, byteStride?: number, name?: string): IBufferView {
+export function createBufferView(bufferIndex: number, byteOffset: number, byteLength: number, byteStride?: number): IBufferView {
     const bufferview: IBufferView = { buffer: bufferIndex, byteLength: byteLength };
 
     if (byteOffset) {
         bufferview.byteOffset = byteOffset;
-    }
-
-    if (name) {
-        bufferview.name = name;
     }
 
     if (byteStride) {
@@ -41,8 +45,7 @@ export function createBufferView(bufferIndex: number, byteOffset: number, byteLe
  * @param componentType The datatype of components in the attribute
  * @param count The number of attributes referenced by this accessor
  * @param byteOffset The offset relative to the start of the bufferView in bytes
- * @param min Minimum value of each component in this attribute
- * @param max Maximum value of each component in this attribute
+ * @param minMax Minimum and maximum value of each component in this attribute
  * @returns accessor for glTF
  */
 export function createAccessor(
@@ -51,17 +54,13 @@ export function createAccessor(
     componentType: AccessorComponentType,
     count: number,
     byteOffset: Nullable<number>,
-    min: Nullable<number[]>,
-    max: Nullable<number[]>
+    minMax: Nullable<{ min: number[]; max: number[] }> = null
 ): IAccessor {
     const accessor: IAccessor = { bufferView: bufferViewIndex, componentType: componentType, count: count, type: type };
 
-    if (min != null) {
-        accessor.min = min;
-    }
-
-    if (max != null) {
-        accessor.max = max;
+    if (minMax != null) {
+        accessor.min = minMax.min;
+        accessor.max = minMax.max;
     }
 
     if (byteOffset != null) {
@@ -69,44 +68,6 @@ export function createAccessor(
     }
 
     return accessor;
-}
-
-/**
- * Calculates the minimum and maximum values of an array of position floats
- * @param positions Positions array of a mesh
- * @param vertexStart Starting vertex offset to calculate min and max values
- * @param vertexCount Number of vertices to check for min and max values
- * @returns min number array and max number array
- */
-export function calculateMinMaxPositions(positions: FloatArray, vertexStart: number, vertexCount: number): [number[], number[]] {
-    const min = [Infinity, Infinity, Infinity];
-    const max = [-Infinity, -Infinity, -Infinity];
-    const positionStrideSize = 3;
-    let indexOffset: number;
-    let position: Vector3;
-    let vector: number[];
-
-    if (vertexCount) {
-        for (let i = vertexStart, length = vertexStart + vertexCount; i < length; ++i) {
-            indexOffset = positionStrideSize * i;
-
-            position = Vector3.FromArray(positions, indexOffset);
-            vector = position.asArray();
-
-            for (let j = 0; j < positionStrideSize; ++j) {
-                const num = vector[j];
-                if (num < min[j]) {
-                    min[j] = num;
-                }
-                if (num > max[j]) {
-                    max[j] = num;
-                }
-                ++indexOffset;
-            }
-        }
-    }
-
-    return [min, max];
 }
 
 export function getAccessorElementCount(accessorType: AccessorType): number {
@@ -196,7 +157,6 @@ export function getPrimitiveMode(fillMode: number): MeshPrimitiveMode {
         case Material.TriangleFanDrawMode:
             return MeshPrimitiveMode.TRIANGLE_FAN;
         case Material.PointListDrawMode:
-            return MeshPrimitiveMode.POINTS;
         case Material.PointFillMode:
             return MeshPrimitiveMode.POINTS;
         case Material.LineLoopDrawMode:
@@ -208,6 +168,17 @@ export function getPrimitiveMode(fillMode: number): MeshPrimitiveMode {
     }
 
     throw new Error(`Unknown fill mode: ${fillMode}`);
+}
+
+export function isTriangleFillMode(fillMode: number): boolean {
+    switch (fillMode) {
+        case Material.TriangleFillMode:
+        case Material.TriangleStripDrawMode:
+        case Material.TriangleFanDrawMode:
+            return true;
+    }
+
+    return false;
 }
 
 export function normalizeTangent(tangent: Vector4) {
@@ -224,7 +195,7 @@ export function normalizeTangent(tangent: Vector4) {
  * @param value value to convert to right-handed
  */
 export function convertToRightHandedPosition(value: Vector3): Vector3 {
-    value.z *= -1;
+    value.x *= -1;
     return value;
 }
 
@@ -298,3 +269,75 @@ export function convertToRightHandedRotation(value: Quaternion): Quaternion {
 //     quaternion[0] *= -1;
 //     quaternion[1] *= -1;
 // }
+
+export function isNoopNode(node: Node, useRightHandedSystem: boolean): boolean {
+    if (!(node instanceof TransformNode)) {
+        return false;
+    }
+
+    // Transform
+    if (useRightHandedSystem) {
+        const matrix = node.getWorldMatrix();
+        if (!matrix.isIdentity()) {
+            return false;
+        }
+    } else {
+        const matrix = node.getWorldMatrix().multiplyToRef(convertHandednessMatrix, TmpVectors.Matrix[0]);
+        if (!matrix.isIdentity()) {
+            return false;
+        }
+    }
+
+    // Geometry
+    if ((node instanceof Mesh && node.geometry) || (node instanceof InstancedMesh && node.sourceMesh.geometry)) {
+        return false;
+    }
+
+    return true;
+}
+
+export function areIndices32Bits(indices: Nullable<IndicesArray>, count: number): boolean {
+    if (indices) {
+        if (indices instanceof Array) {
+            return indices.some((value) => value >= 65536);
+        }
+
+        return indices.BYTES_PER_ELEMENT === 4;
+    }
+
+    return count >= 65536;
+}
+
+export function indicesArrayToUint8Array(indices: IndicesArray, start: number, count: number, is32Bits: boolean): Uint8Array {
+    if (indices instanceof Array) {
+        const subarray = indices.slice(start, start + count);
+        indices = is32Bits ? new Uint32Array(subarray) : new Uint16Array(subarray);
+        return new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength);
+    }
+
+    return ArrayBuffer.isView(indices) ? new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength) : new Uint8Array(indices);
+}
+
+export function dataArrayToUint8Array(data: DataArray): Uint8Array {
+    if (data instanceof Array) {
+        const floatData = new Float32Array(data);
+        return new Uint8Array(floatData.buffer, floatData.byteOffset, floatData.byteLength);
+    }
+
+    return ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+}
+
+export function getMinMax(data: DataArray, vertexBuffer: VertexBuffer, start: number, count: number): { min: number[]; max: number[] } {
+    const { byteOffset, byteStride, type, normalized } = vertexBuffer;
+    const size = vertexBuffer.getSize();
+    const min = new Array<number>(size).fill(Infinity);
+    const max = new Array<number>(size).fill(-Infinity);
+    enumerateFloatValues(data, byteOffset + start * byteStride, byteStride, size, type, count * size, normalized, (values) => {
+        for (let i = 0; i < size; i++) {
+            min[i] = Math.min(min[i], values[i]);
+            max[i] = Math.max(max[i], values[i]);
+        }
+    });
+
+    return { min, max };
+}

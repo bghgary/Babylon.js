@@ -2,6 +2,7 @@ import type { Nullable, DataArray, FloatArray } from "../types";
 import type { ThinEngine } from "../Engines/thinEngine";
 import { DataBuffer } from "./dataBuffer";
 import type { Mesh } from "../Meshes/mesh";
+import { enumerateFloatValues, getFloatData } from "./bufferUtils";
 
 /**
  * Class used to store data that will be store in GPU memory
@@ -619,9 +620,9 @@ export class VertexBuffer {
             return null;
         }
 
-        totalVertices = totalVertices ?? this.totalVertices;
+        totalVertices ??= this.totalVertices;
 
-        return VertexBuffer.GetFloatData(data, this._size, this.type, this.byteOffset, this.byteStride, this.normalized, totalVertices, forceCopy);
+        return getFloatData(data, this._size, this.type, this.byteOffset, this.byteStride, this.normalized, totalVertices, forceCopy);
     }
 
     /**
@@ -726,7 +727,11 @@ export class VertexBuffer {
      * @param callback the callback function called for each value
      */
     public forEach(count: number, callback: (value: number, index: number) => void): void {
-        VertexBuffer.ForEach(this._buffer.getData()!, this.byteOffset, this.byteStride, this._size, this.type, count, this.normalized, callback);
+        enumerateFloatValues(this._buffer.getData()!, this.byteOffset, this.byteStride, this._size, this.type, count, this.normalized, (values, index) => {
+            for (let i = 0; i < this._size; i++) {
+                callback(values[i], index + i);
+            }
+        });
     }
 
     /** @internal */
@@ -879,6 +884,7 @@ export class VertexBuffer {
      * @param count the number of values to enumerate
      * @param normalized whether the data is normalized
      * @param callback the callback function called for each value
+     * @deprecated Use `enumerateFloatValues` from `bufferUtils` instead
      */
     public static ForEach(
         data: DataArray,
@@ -890,73 +896,11 @@ export class VertexBuffer {
         normalized: boolean,
         callback: (value: number, index: number) => void
     ): void {
-        if (data instanceof Array) {
-            let offset = byteOffset / 4;
-            const stride = byteStride / 4;
-            for (let index = 0; index < count; index += componentCount) {
-                for (let componentIndex = 0; componentIndex < componentCount; componentIndex++) {
-                    callback(data[offset + componentIndex], index + componentIndex);
-                }
-                offset += stride;
+        return enumerateFloatValues(data, byteOffset, byteStride, componentCount, componentType, count, normalized, (values, index) => {
+            for (let componentIndex = 0; componentIndex < componentCount; componentIndex++) {
+                callback(values[componentIndex], index + componentIndex);
             }
-        } else {
-            const dataView = data instanceof ArrayBuffer ? new DataView(data) : new DataView(data.buffer, data.byteOffset, data.byteLength);
-            const componentByteLength = VertexBuffer.GetTypeByteLength(componentType);
-            for (let index = 0; index < count; index += componentCount) {
-                let componentByteOffset = byteOffset;
-                for (let componentIndex = 0; componentIndex < componentCount; componentIndex++) {
-                    const value = VertexBuffer._GetFloatValue(dataView, componentType, componentByteOffset, normalized);
-                    callback(value, index + componentIndex);
-                    componentByteOffset += componentByteLength;
-                }
-                byteOffset += byteStride;
-            }
-        }
-    }
-
-    private static _GetFloatValue(dataView: DataView, type: number, byteOffset: number, normalized: boolean): number {
-        switch (type) {
-            case VertexBuffer.BYTE: {
-                let value = dataView.getInt8(byteOffset);
-                if (normalized) {
-                    value = Math.max(value / 127, -1);
-                }
-                return value;
-            }
-            case VertexBuffer.UNSIGNED_BYTE: {
-                let value = dataView.getUint8(byteOffset);
-                if (normalized) {
-                    value = value / 255;
-                }
-                return value;
-            }
-            case VertexBuffer.SHORT: {
-                let value = dataView.getInt16(byteOffset, true);
-                if (normalized) {
-                    value = Math.max(value / 32767, -1);
-                }
-                return value;
-            }
-            case VertexBuffer.UNSIGNED_SHORT: {
-                let value = dataView.getUint16(byteOffset, true);
-                if (normalized) {
-                    value = value / 65535;
-                }
-                return value;
-            }
-            case VertexBuffer.INT: {
-                return dataView.getInt32(byteOffset, true);
-            }
-            case VertexBuffer.UNSIGNED_INT: {
-                return dataView.getUint32(byteOffset, true);
-            }
-            case VertexBuffer.FLOAT: {
-                return dataView.getFloat32(byteOffset, true);
-            }
-            default: {
-                throw new Error(`Invalid component type ${type}`);
-            }
-        }
+        });
     }
 
     /**
@@ -970,6 +914,7 @@ export class VertexBuffer {
      * @param totalVertices number of vertices in the buffer to take into account
      * @param forceCopy defines a boolean indicating that the returned array must be cloned upon returning it
      * @returns a float array containing vertex data
+     * @deprecated Use `getFloatData` from `bufferUtils` instead
      */
     public static GetFloatData(
         data: DataArray,
@@ -981,47 +926,6 @@ export class VertexBuffer {
         totalVertices: number,
         forceCopy?: boolean
     ): FloatArray {
-        const tightlyPackedByteStride = size * VertexBuffer.GetTypeByteLength(type);
-        const count = totalVertices * size;
-
-        if (type !== VertexBuffer.FLOAT || byteStride !== tightlyPackedByteStride) {
-            const copy = new Float32Array(count);
-            VertexBuffer.ForEach(data, byteOffset, byteStride, size, type, count, normalized, (value, index) => (copy[index] = value));
-            return copy;
-        }
-
-        if (!(data instanceof Array || data instanceof Float32Array) || byteOffset !== 0 || data.length !== count) {
-            if (data instanceof Array) {
-                const offset = byteOffset / 4;
-                return data.slice(offset, offset + count);
-            } else if (data instanceof ArrayBuffer) {
-                return new Float32Array(data, byteOffset, count);
-            } else {
-                let offset = data.byteOffset + byteOffset;
-                if (forceCopy) {
-                    const result = new Float32Array(count);
-                    const source = new Float32Array(data.buffer, offset, count);
-
-                    result.set(source);
-
-                    return result;
-                }
-
-                // Protect against bad data
-                const remainder = offset % 4;
-
-                if (remainder) {
-                    offset = Math.max(0, offset - remainder);
-                }
-
-                return new Float32Array(data.buffer, offset, count);
-            }
-        }
-
-        if (forceCopy) {
-            return data.slice();
-        }
-
-        return data;
+        return getFloatData(data, size, type, byteOffset, byteStride, normalized, totalVertices, forceCopy);
     }
 }

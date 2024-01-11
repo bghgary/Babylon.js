@@ -37,7 +37,7 @@ export interface IGLTFExporterExtensionV2 extends IGLTFExporterExtension, IDispo
     postExportTexture?(context: string, textureInfo: ITextureInfo, babylonTexture: BaseTexture): void;
 
     /**
-     * Define this method to modify the default behavior when exporting texture info
+     * Define this method to modify the default behavior when exporting a mesh primitive
      * @param context The context when loading the asset
      * @param meshPrimitive glTF mesh primitive
      * @param babylonSubMesh Babylon submesh
