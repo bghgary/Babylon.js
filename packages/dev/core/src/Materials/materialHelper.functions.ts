@@ -569,7 +569,9 @@ export function PrepareDefinesForLights(scene: Scene, mesh: AbstractMesh, define
     defines["SHADOWS"] = state.shadowEnabled;
 
     // Resetting all other lights if any
-    for (let index = lightIndex; index < maxSimultaneousLights; index++) {
+    const maxLightCount = Math.max(maxSimultaneousLights, defines["MAXLIGHTCOUNT"] || 0);
+
+    for (let index = lightIndex; index < maxLightCount; index++) {
         if (defines["LIGHT" + index] !== undefined) {
             defines["LIGHT" + index] = false;
             defines["HEMILIGHT" + index] = false;
@@ -577,6 +579,7 @@ export function PrepareDefinesForLights(scene: Scene, mesh: AbstractMesh, define
             defines["DIRLIGHT" + index] = false;
             defines["SPOTLIGHT" + index] = false;
             defines["AREALIGHT" + index] = false;
+            defines["CLUSTLIGHT" + index] = false;
             defines["SHADOW" + index] = false;
             defines["SHADOWCSM" + index] = false;
             defines["SHADOWCSMDEBUG" + index] = false;
@@ -594,6 +597,8 @@ export function PrepareDefinesForLights(scene: Scene, mesh: AbstractMesh, define
             defines["SHADOWMEDIUMQUALITY" + index] = false;
         }
     }
+
+    defines["MAXLIGHTCOUNT"] = maxSimultaneousLights;
 
     const caps = scene.getEngine().getCaps();
 
@@ -1083,6 +1088,7 @@ export function PrepareDefinesForCamera(scene: Scene, defines: any): boolean {
  * @param uniformBuffersList defines an optional list of uniform buffers
  * @param updateOnlyBuffersList True to only update the uniformBuffersList array
  * @param iesLightTexture defines if IES texture must be used
+ * @param clusteredLightTextures defines if the clustered light textures must be used
  */
 export function PrepareUniformsAndSamplersForLight(
     lightIndex: number,
@@ -1091,7 +1097,8 @@ export function PrepareUniformsAndSamplersForLight(
     projectedLightTexture?: any,
     uniformBuffersList: Nullable<string[]> = null,
     updateOnlyBuffersList = false,
-    iesLightTexture = false
+    iesLightTexture = false,
+    clusteredLightTextures = false
 ) {
     if (uniformBuffersList) {
         uniformBuffersList.push("Light" + lightIndex);
@@ -1110,6 +1117,8 @@ export function PrepareUniformsAndSamplersForLight(
         "vLightHeight" + lightIndex,
         "vLightFalloff" + lightIndex,
         "vLightGround" + lightIndex,
+        "vSliceData" + lightIndex,
+        "vSliceRanges" + lightIndex,
         "lightMatrix" + lightIndex,
         "shadowsInfo" + lightIndex,
         "depthValues" + lightIndex
@@ -1133,6 +1142,10 @@ export function PrepareUniformsAndSamplersForLight(
     }
     if (iesLightTexture) {
         samplersList.push("iesLightTexture" + lightIndex);
+    }
+    if (clusteredLightTextures) {
+        samplersList.push("lightDataTexture" + lightIndex);
+        samplersList.push("tileMaskTexture" + lightIndex);
     }
 }
 
@@ -1172,7 +1185,8 @@ export function PrepareUniformsAndSamplersList(uniformsListOrOptions: string[] |
             defines["PROJECTEDLIGHTTEXTURE" + lightIndex],
             uniformBuffersList,
             false,
-            defines["IESLIGHTTEXTURE" + lightIndex]
+            defines["IESLIGHTTEXTURE" + lightIndex],
+            defines["CLUSTLIGHT" + lightIndex]
         );
     }
 
