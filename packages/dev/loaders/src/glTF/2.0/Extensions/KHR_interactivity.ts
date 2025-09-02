@@ -59,6 +59,7 @@ export class KHR_interactivity implements IGLTFLoaderExtension {
         }
     }
 
+    /** @override */
     public dispose() {
         (this._loader as any) = null;
         delete this._pathConverter;
@@ -83,7 +84,8 @@ export class KHR_interactivity implements IGLTFLoaderExtension {
             return parser.serializeToFlowGraph();
         });
         // parse each graph async
-        await Promise.all(graphs.map(async (graph) => await ParseFlowGraphAsync(graph, { coordinator, pathConverter: this._pathConverter })));
+        // eslint-disable-next-line @typescript-eslint/promise-function-async
+        await Promise.all(graphs.map((graph) => ParseFlowGraphAsync(graph, { coordinator, pathConverter: this._pathConverter })));
 
         coordinator.start();
     }
