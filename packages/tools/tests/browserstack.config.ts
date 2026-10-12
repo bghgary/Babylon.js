@@ -1,6 +1,5 @@
-import cp from "child_process";
+import { version as clientPlaywrightVersion } from "playwright/package.json";
 import BrowserStackLocal from "browserstack-local";
-const clientPlaywrightVersion = cp.execSync("npx playwright --version").toString().trim().split(" ")[1];
 const browserStackLocalEnabled = process.env.BROWSERSTACK_LOCAL === "true";
 export const browserStackLocalIdentifier = process.env.BROWSERSTACK_LOCAL_IDENTIFIER;
 

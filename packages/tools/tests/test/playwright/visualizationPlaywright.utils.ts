@@ -3,11 +3,23 @@ import * as fs from "fs";
 
 import { test, expect, Page } from "@playwright/test";
 import { getGlobalConfig } from "@tools/test-tools";
-import { FetchSnippet, ParseSnippetResponse, CreateTypeScriptTranspiler, type IPlaygroundSnippetResult } from "@tools/snippet-loader";
-import * as ts from "typescript";
+import { FetchSnippet, ParseSnippetResponse, type IPlaygroundSnippetResult } from "@tools/snippet-loader";
+import { NativePage } from "./nativePage";
+import { getActiveEngineExclusionTags, isEngineExcluded, resolveNativeRunIdentity } from "./engineExclusionTags";
+import { transpileSnippet } from "./snippetTranspiler";
 
-// Reusable TypeScript transpiler for TS→JS conversion on the Node side
-const tsTranspile = CreateTypeScriptTranspiler(ts);
+interface VisualizationPage {
+    evaluate<R, Arg>(pageFunction: string | ((arg: Arg) => R | Promise<R>), arg?: Arg): Promise<R>;
+    setViewportSize(viewportSize: { width: number; height: number }): Promise<void>;
+    goto(url: string, options?: { timeout?: number }): Promise<unknown>;
+    waitForSelector(selector: string, options?: { timeout?: number }): Promise<unknown>;
+    waitForFunction<R>(pageFunction: () => R | Promise<R>): Promise<unknown>;
+    setDefaultTimeout(timeout: number): void;
+    on(event: "console", listener: (message: any) => void): unknown;
+    off(event: "console", listener: (message: any) => void): unknown;
+    screenshot(): Promise<Buffer>;
+    close(): Promise<void>;
+}
 
 /**
  * Strips ES module syntax (import/export) from code so it can be eval'd
@@ -73,7 +85,7 @@ async function preloadSnippetCode(playgroundId: string, snippetUrl: string): Pro
     const result = await ParseSnippetResponse(response, playgroundId, {
         moduleFormat: "esm",
         // Only transpile TS files; pass JS through unchanged to avoid unnecessary overhead
-        transpile: (source, fileName) => (/\.tsx?$/i.test(fileName) ? tsTranspile(source, fileName) : source),
+        transpile: transpileSnippet,
     });
 
     if (result.type !== "playground") {
@@ -185,12 +197,13 @@ export const evaluatePlaywrightVisTests = async (
         }
     }
 
-    let page: Page;
+    let page: VisualizationPage;
+    let browserPage: Page | undefined;
 
     // test.describe.configure({ mode: "serial" });
 
-    test.beforeAll(async ({ browser }) => {
-        page = await browser.newPage();
+    const initializePage = async (newPage: VisualizationPage) => {
+        page = newPage;
         await page.setViewportSize({ width: dimensions?.width || 600, height: dimensions?.height || 400 });
         await page.goto(getGlobalConfig({ root: config.root, usesDevHost: false }).baseUrl + `/empty.html`, {
             // waitUntil: "load",
@@ -202,42 +215,83 @@ export const evaluatePlaywrightVisTests = async (
             return window.BABYLON;
         });
         page.setDefaultTimeout(0);
-    });
+    };
+
+    if (engineType !== "native") {
+        test.beforeAll(async ({ browser }) => {
+            browserPage = await browser.newPage();
+            await initializePage(browserPage);
+        });
+    }
 
     test.afterAll(async () => {
-        await page.close();
+        await page?.close();
     });
 
     test.beforeEach(async () => {
+        // A native startup failure must fail one test, not skip the rest of the worker's group.
+        if (engineType === "native" && !page) {
+            await initializePage(await NativePage.launch());
+        }
         await page.evaluate(() => {
             if (window.scene && window.scene.dispose) {
                 // run the dispose function here
                 window.scene.dispose();
                 window.scene = null;
-                window.engine && window.engine.dispose();
-                window.engine = null;
+                if (!(globalThis as any).__babylonNativePlaywright) {
+                    window.engine && window.engine.dispose();
+                    window.engine = null;
+                }
             }
         });
     });
 
-    test.afterEach(async () => {
-        await page.evaluate(() => {
-            if (window.scene && window.scene.dispose) {
-                window.scene.dispose();
+    test.afterEach(async ({}, testInfo) => {
+        if (!page) {
+            return;
+        }
+        if (page instanceof NativePage && testInfo.status !== testInfo.expectedStatus) {
+            // Playwright retires this worker after failure; do not wait on a possibly blocked JS thread.
+            page.abort(new Error(`Native test failed: ${testInfo.title}`));
+            try {
+                await page.close();
+            } catch (error) {
+                await testInfo.attach("native-cleanup-error", { body: String(error), contentType: "text/plain" });
             }
-            window.scene = null;
-            if (window.engine && window.engine.dispose) {
-                window.engine.dispose();
+            return;
+        }
+        try {
+            await page.evaluate(() => {
+                if (window.scene && window.scene.dispose) {
+                    window.scene.dispose();
+                }
+                window.scene = null;
+                if (!(globalThis as any).__babylonNativePlaywright && window.engine && window.engine.dispose) {
+                    window.engine.dispose();
+                    window.engine = null;
+                }
+            });
+        } catch (error) {
+            if (page instanceof NativePage) {
+                page.abort(error instanceof Error ? error : new Error(String(error)));
             }
-            window.engine = null;
-        });
+            throw error;
+        }
     });
+
+    const nativeIdentity = engineType === "native" ? resolveNativeRunIdentity() : undefined;
+    const activeEngineTags = getActiveEngineExclusionTags(engineType, nativeIdentity);
+    if (engineType === "native") {
+        console.log(`Native exclusion tags: ${activeEngineTags.join(", ")}` + ` (set BABYLON_NATIVE_GRAPHICS_API / BABYLON_NATIVE_PLATFORM for backend/platform granularity)`);
+    }
 
     for (const testCase of tests) {
         if (testCase.excludeFromAutomaticTesting) {
             continue;
         }
-        if (testCase.excludedEngines && testCase.excludedEngines.indexOf(engineType) !== -1) {
+        // OR match: skip if any listed tag is active for this run
+        // native | native-d3d11 | native-vk | native-gl | native-win32 | native-win32-d3d11 | webgl1 | ...
+        if (isEngineExcluded(testCase.excludedEngines, activeEngineTags)) {
             continue;
         }
         test(testCase.title, async () => {
@@ -250,17 +304,21 @@ export const evaluatePlaywrightVisTests = async (
             test.setTimeout(timeout);
 
             // Initialize engine with per-test options from the test case config
-            const rendererData = await page.evaluate(evaluateInitEngineForVisualization, {
-                engineName: engineType,
-                useLargeWorldRendering: testCase.useLargeWorldRendering ?? false,
-                useReverseDepthBuffer: testCase.useReverseDepthBuffer ?? "false",
-                useNonCompatibilityMode: testCase.useNonCompatibilityMode ?? "false",
-                baseUrl: getGlobalConfig({ root: config.root, usesDevHost: false }).baseUrl,
-            });
+            const rendererData = await test.step("Initialize engine", () =>
+                page.evaluate(evaluateInitEngineForVisualization, {
+                    engineName: engineType,
+                    useLargeWorldRendering: testCase.useLargeWorldRendering ?? false,
+                    useReverseDepthBuffer: testCase.useReverseDepthBuffer ?? "false",
+                    useNonCompatibilityMode: testCase.useNonCompatibilityMode ?? "false",
+                    baseUrl: getGlobalConfig({ root: config.root, usesDevHost: false }).baseUrl,
+                }));
             log(rendererData.renderer);
 
             if (optionalStateChanges?.beforeScene) {
-                await optionalStateChanges.beforeScene(page);
+                if (!browserPage) {
+                    throw new Error("Native visualization tests do not support browser-only beforeScene hooks.");
+                }
+                await optionalStateChanges.beforeScene(browserPage);
             }
 
             // Pre-load snippet code on the Node side using the snippet loader
@@ -269,7 +327,7 @@ export const evaluatePlaywrightVisTests = async (
             if (testCase.playgroundId) {
                 const globalCfg = getGlobalConfig({ root: config.root, usesDevHost: false });
                 try {
-                    const preloaded = await preloadSnippetCode(testCase.playgroundId, globalCfg.snippetUrl);
+                    const preloaded = await test.step("Fetch snippet", () => preloadSnippetCode(testCase.playgroundId, globalCfg.snippetUrl));
                     snippetCode = preloaded.code;
                     snippetSceneCall = preloaded.sceneCall;
                 } catch (e) {
@@ -278,28 +336,41 @@ export const evaluatePlaywrightVisTests = async (
                 }
             }
 
-            await page.evaluate(evaluatePrepareScene, {
-                sceneMetadata: { ...testCase, snippetCode, snippetSceneCall },
-                globalConfig: getGlobalConfig({ root: config.root, usesDevHost: false }),
-            });
+            await test.step("Prepare scene", () =>
+                page.evaluate(evaluatePrepareScene, {
+                    sceneMetadata: { ...testCase, snippetCode, snippetSceneCall },
+                    globalConfig: getGlobalConfig({ root: config.root, usesDevHost: false }),
+                }));
             if (optionalStateChanges?.beforeRender) {
-                await optionalStateChanges.beforeRender(page);
+                if (!browserPage) {
+                    throw new Error("Native visualization tests do not support browser-only beforeRender hooks.");
+                }
+                await optionalStateChanges.beforeRender(browserPage);
             }
             const renderCount = testCase.renderCount || 1;
-            const renderResult = await page.evaluate(evaluateRenderSceneForVisualization, { renderCount, continueRenderingOnDone: !!testCase.continueRenderingOnDone });
+            const renderResult = await test.step("Render scene", () =>
+                page.evaluate(evaluateRenderSceneForVisualization, { renderCount, continueRenderingOnDone: !!testCase.continueRenderingOnDone }));
             expect(renderResult).toBeTruthy();
             if (engineType.startsWith("webgl")) {
                 const glError = await page.evaluate(evaluateIsGLError);
                 expect(glError).toBe(false);
             }
-            await expect(page).toHaveScreenshot((testCase.referenceImage || testCase.title).replace(".png", "") + ".png", {
-                timeout: 7000,
-                // omitBackground: true,
-                // 3% change in color is allowed
+            const screenshotName = (testCase.referenceImage || testCase.title).replace(".png", "") + ".png";
+            const screenshotOptions = {
                 threshold: process.env.SCREENSHOT_THRESHOLD ? +process.env.SCREENSHOT_THRESHOLD : 0.035,
-                // default to 1% pixel changed allowed
                 maxDiffPixelRatio: (testCase.errorRatio || (process.env.SCREENSHOT_MAX_PIXEL ? +process.env.SCREENSHOT_MAX_PIXEL : 1.1)) / 100,
-            });
+            };
+            if (page instanceof NativePage) {
+                const screenshot = await test.step("Encode screenshot", () => page.screenshot());
+                await test.step("Compare screenshot", async () => {
+                    expect(screenshot).toMatchSnapshot(screenshotName, screenshotOptions);
+                });
+            } else {
+                if (!browserPage) {
+                    throw new Error("Browser page was not initialized.");
+                }
+                await expect(browserPage).toHaveScreenshot(screenshotName, { timeout: 7000, ...screenshotOptions });
+            }
             page.off("console", logCallback);
         });
     }
@@ -307,6 +378,9 @@ export const evaluatePlaywrightVisTests = async (
 
 /* eslint-disable @typescript-eslint/naming-convention */
 declare const BABYLON: typeof window.BABYLON;
+declare const TestUtils: {
+    getFrameBufferData(callback: (data: Uint8Array) => void): void;
+};
 
 export const evaluateInitEngineForVisualization = async ({
     engineName,
@@ -322,7 +396,8 @@ export const evaluateInitEngineForVisualization = async ({
     baseUrl: string;
 }) => {
     engineName = engineName ? engineName.toLowerCase() : "webgl2";
-    if (window.engine) {
+    const isNative = engineName === "native";
+    if (window.engine && !isNative) {
         window.engine.dispose();
         window.engine = null;
     }
@@ -364,8 +439,17 @@ export const evaluateInitEngineForVisualization = async ({
     window.forceUseReverseDepthBuffer = useReverseDepthBuffer === 1 || useReverseDepthBuffer === "true";
     window.forceUseNonCompatibilityMode = useNonCompatibilityMode === 1 || useNonCompatibilityMode === "true";
 
-    window.canvas = document.getElementById("babylon-canvas") as HTMLCanvasElement;
-    if (engineName === "webgpu") {
+    if (isNative) {
+        (window as any).canvas = window;
+        const engine = window.engine || new BABYLON.NativeEngine();
+        (engine as any).getRenderingCanvas = () => window;
+        (engine as any).getInputElement = () => null;
+        engine.enableOfflineSupport = false;
+        engine.useReverseDepthBuffer = window.forceUseReverseDepthBuffer;
+        engine.compatibilityMode = !window.forceUseNonCompatibilityMode;
+        window.engine = engine;
+    } else if (engineName === "webgpu") {
+        window.canvas = document.getElementById("babylon-canvas") as HTMLCanvasElement;
         const glslangOptions = {
             jsPath: baseUrl + "/glslang/glslang.js",
             wasmPath: baseUrl + "/glslang/glslang.wasm",
@@ -376,7 +460,7 @@ export const evaluateInitEngineForVisualization = async ({
             wasmPath: baseUrl + "/twgsl/twgsl.wasm",
         };
 
-        const options: BABYLON.WebGPUEngineOptions = {
+        const options = {
             enableAllFeatures: true,
             setMaximumLimits: true,
             antialias: false,
@@ -392,6 +476,7 @@ export const evaluateInitEngineForVisualization = async ({
 
         await engine.initAsync(glslangOptions, twgslOptions);
     } else {
+        window.canvas = document.getElementById("babylon-canvas") as HTMLCanvasElement;
         const engine = new BABYLON.Engine(window.canvas, false, {
             useHighPrecisionFloats: true,
             disableWebGL2Support: engineName === "webgl1" ? true : false,
@@ -457,7 +542,9 @@ export const evaluatePrepareScene = async ({
         }
 
         const retryTime = 500;
-        const maxRetry = 5;
+        // Native asset requests already retry transient network failures. Re-evaluating a failed
+        // scene also repeats deterministic errors and can leave partially constructed scenes.
+        const maxRetry = (globalThis as typeof globalThis & { __babylonNativePlaywright?: boolean }).__babylonNativePlaywright === true ? 0 : 5;
         let retry = 0;
 
         const runSnippet = async function () {
@@ -598,8 +685,12 @@ export const evaluateRenderSceneForVisualization = async ({ renderCount, continu
             if (window.scene.activeCamera && (window.scene.activeCamera as any).useAutoRotationBehavior) {
                 (window.scene.activeCamera as any).useAutoRotationBehavior = false;
             }
+            let nativeCapturePending = false;
             window.engine.runRenderLoop(function () {
                 try {
+                    if (nativeCapturePending) {
+                        return;
+                    }
                     if (renderCount <= 0) {
                         const ready = window.scene!.isReady();
                         if (!ready || !continueRenderingOnDone) {
@@ -617,6 +708,20 @@ export const evaluateRenderSceneForVisualization = async ({ renderCount, continu
                         (window as any).onRenderCallback && (window as any).onRenderCallback();
                         window.scene && window.scene.render();
                         renderCount--;
+                        if ((globalThis as any).__babylonNativePlaywright && renderCount === 0 && !nativeCapturePending) {
+                            nativeCapturePending = true;
+                            TestUtils.getFrameBufferData((data) => {
+                                (globalThis as any).__babylonNativeScreenshot = {
+                                    data,
+                                    width: window.engine!.getRenderWidth(),
+                                    height: window.engine!.getRenderHeight(),
+                                };
+                                if (!continueRenderingOnDone) {
+                                    window.engine && window.engine.stopRenderLoop();
+                                }
+                                resolve(true);
+                            });
+                        }
                     }
                 } catch (e) {
                     window.engine && window.engine.stopRenderLoop();

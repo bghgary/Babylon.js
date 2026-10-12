@@ -5,6 +5,7 @@ import * as fs from "fs";
 import { test, expect, Page, Browser } from "@playwright/test";
 import { getGlobalConfig } from "@tools/test-tools";
 import { evaluateDisposeSceneForVisualization, evaluateInitEngineForVisualization, evaluatePrepareScene } from "./visualizationPlaywright.utils";
+import { getActiveEngineExclusionTags, isEngineExcluded, resolveNativeRunIdentity } from "./engineExclusionTags";
 
 export const checkPerformanceOfScene = async (page: Page, baseUrl: string, numberOfPasses: number = 7, framesToRender: number = 10000, metadata?: { playgroundId: string }) => {
     if (numberOfPasses < 5) {
@@ -108,12 +109,15 @@ export const performanceTests = async (engineType = "webgl2", testFileName = "co
         }
     });
 
+    const nativeIdentity = engineType === "native" ? resolveNativeRunIdentity() : undefined;
+    const activeEngineTags = getActiveEngineExclusionTags(engineType, nativeIdentity);
+
     const tests: any[] = config.tests.filter((test: any) => {
         const externallyExcluded = excludeRegexArray.some((regex) => {
             const re = new RegExp(regex, "i");
             return re.test(test.title);
         });
-        return !(externallyExcluded || test.excludeFromAutomaticTesting || (test.excludedEngines && test.excludedEngines.includes(engineType)));
+        return !(externallyExcluded || test.excludeFromAutomaticTesting || isEngineExcluded(test.excludedEngines, activeEngineTags));
     });
 
     function log(msg: any, title?: string) {
@@ -197,7 +201,7 @@ export const performanceTests = async (engineType = "webgl2", testFileName = "co
         if (testCase.excludeFromAutomaticTesting) {
             continue;
         }
-        if (testCase.excludedEngines && testCase.excludedEngines.indexOf(engineType) !== -1) {
+        if (isEngineExcluded(testCase.excludedEngines, activeEngineTags)) {
             continue;
         }
         test(testCase.title, async ({ browser }) => {

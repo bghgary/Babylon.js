@@ -11,6 +11,63 @@ This package contains the Playwright-based test suites for Babylon.js:
 
 ## Running Tests Locally
 
+### BabylonNative visualization tests
+
+Build BabylonNative's Win32 `Playground` target with the Playwright bridge,
+then point the native Playwright project at the executable:
+
+```powershell
+$env:BABYLON_NATIVE_PLAYGROUND = "C:\path\to\BabylonNative\Build\Apps\Playground\Release\Playground.exe"
+# Optional identity for granular excludedEngines matching:
+$env:BABYLON_NATIVE_GRAPHICS_API = "d3d11"   # d3d11 | d3d12 | vk | gl | gles | metal | ...
+$env:BABYLON_NATIVE_PLATFORM = "win32"       # win32 | uwp | android | ios | osx | unix | ...
+npx playwright test --config playwright.config.ts --project native
+```
+
+Native uses the **same** goldens as browser visualization tests under
+`test/visualization/ReferenceImages/` — native output is expected to match web.
+
+The native project defaults to zero test retries (`--retries` can override this).
+Native scene-construction errors fail immediately rather than evaluating the same
+scene repeatedly; transient asset-request retries are unchanged. Browser projects
+retain their existing retry behavior. Failed native tests terminate their host
+before Playwright replaces the worker, while successful tests reuse the engine.
+Native startup is lazy per worker inside `beforeEach`, so a host startup crash
+fails the current test instead of skipping the rest of a `beforeAll` group.
+Shutdown waits at most five seconds before forcing termination, then allows five
+seconds to observe exit; shutdown failures are reported, not silently ignored.
+
+For timing comparisons, keep the catalog, executable, assets, worker count and
+goldens fixed, and retain a structured report:
+
+```powershell
+$env:PLAYWRIGHT_JSON_OUTPUT_NAME = "$PWD\native-results.json"
+npx playwright test --config playwright.config.ts --project native --workers 4 --retries 0 --update-snapshots=none --trace off --reporter=line,json
+```
+
+The report includes engine initialization, snippet fetch, scene preparation,
+rendering, PNG capture and comparison steps. Count actual result statuses;
+unexecuted cases are not passes. Native and legacy validation timings are not
+directly comparable when their catalogs, exclusions or reference images differ.
+
+#### `excludedEngines` for native (combinable, OR)
+
+| Tag | Meaning |
+|---|---|
+| `native` | all native backends/platforms |
+| `native-d3d11` / `native-d3d12` / `native-vk` / `native-gl` / `native-gles` / `native-metal` | one graphics API |
+| `native-win32` / `native-uwp` / `native-android` / `native-ios` / `native-osx` / `native-unix` | one platform |
+| `native-win32-d3d11` (etc.) | compound platform+API |
+
+Examples in `config.json`:
+
+```json
+"excludedEngines": ["native"]
+"excludedEngines": ["native-d3d11", "native-vk"]
+"excludedEngines": ["webgpu", "native-gles"]
+"excludedEngines": ["native-android-gles", "native-ios-metal"]
+```
+
 ### Visualization tests (local browser)
 
 ```bash

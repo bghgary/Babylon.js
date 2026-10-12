@@ -2,6 +2,7 @@ import { test, expect, Page } from "@playwright/test";
 import { evaluatePrepareScene, getGlobalConfig, comparePerformance } from "@tools/test-tools";
 import * as path from "path";
 import * as fs from "fs";
+import { getActiveEngineExclusionTags, isEngineExcluded, resolveNativeRunIdentity } from "../playwright/engineExclusionTags";
 
 /**
  * Visualization performance tests — runs visualization test cases from config.json
@@ -109,9 +110,12 @@ for (const engine of engines) {
             await page?.close();
         });
 
+        const nativeIdentity = engine === "native" ? resolveNativeRunIdentity() : undefined;
+        const activeEngineTags = getActiveEngineExclusionTags(engine, nativeIdentity);
+
         for (const vizTest of runnableTests) {
-            // Skip tests that exclude this engine
-            if (vizTest.excludedEngines && vizTest.excludedEngines.includes(engine)) {
+            // Skip tests that exclude this engine (supports native-d3d11 / native-vk / compounds, OR-combined)
+            if (isEngineExcluded(vizTest.excludedEngines, activeEngineTags)) {
                 continue;
             }
 

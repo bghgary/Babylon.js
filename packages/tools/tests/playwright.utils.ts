@@ -9,7 +9,13 @@ const browserType = process.env.BROWSER || (isCI ? "Firefox" : "Chrome");
 const browserStackBrowser = process.env.BROWSERSTACK_BROWSER || "chrome@latest:OSX Sonoma";
 
 export function getBabylonServerTestsList() {
-    return [
+    const projects: Array<{
+        name: string;
+        testMatch: string | string[];
+        use: ReturnType<typeof getUseDefinition> | {};
+        snapshotPathTemplate?: string;
+        retries?: number;
+    }> = [
         {
             name: "webgl2",
             testMatch: "**/*webgl2.test.ts",
@@ -115,6 +121,19 @@ export function getBabylonServerTestsList() {
             use: getUseDefinition("WebGPU", "Chrome", false, true),
         },
     ];
+
+    if (process.env.BABYLON_NATIVE_PLAYGROUND) {
+        projects.push({
+            name: "native",
+            testMatch: "**/*native.test.ts",
+            use: {},
+            retries: 0,
+            // Same goldens as browser visualization tests — native must match web.
+            snapshotPathTemplate: "packages/tools/tests/test/visualization/ReferenceImages/{arg}{ext}",
+        });
+    }
+
+    return projects;
 }
 
 export function getDevHostTestsList() {
