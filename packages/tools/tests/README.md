@@ -27,6 +27,10 @@ npx playwright test --config playwright.config.ts --project native
 Native uses the **same** goldens as browser visualization tests under
 `test/visualization/ReferenceImages/` — native output is expected to match web.
 
+Other native hosts can set `BABYLON_NATIVE_TRANSPORT` to an absolute CommonJS module path instead of an executable. The module exports `createTransport(onConsole, signal)` and returns the `NativePageTransport` contract in `nativePage.ts`: protocol requests, abort and asynchronous close. Each Playwright worker owns its transport; cloud adapters must release their device and tunnel before close completes. The shared scene definitions, snapshot assertions and native exclusion tags stay unchanged.
+
+`BABYLON_NATIVE_STARTUP_TIMEOUT_MS` sets the startup deadline (default 30 seconds). The factory must observe its abort signal and finish failed-startup cleanup before rejecting; the signal must not cancel subsequent session cleanup requests.
+
 The native project defaults to zero test retries (`--retries` can override this).
 Native scene-construction errors fail immediately rather than evaluating the same
 scene repeatedly; transient asset-request retries are unchanged. Browser projects

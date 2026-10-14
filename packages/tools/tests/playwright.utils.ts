@@ -122,7 +122,7 @@ export function getBabylonServerTestsList() {
         },
     ];
 
-    if (process.env.BABYLON_NATIVE_PLAYGROUND) {
+    if (process.env.BABYLON_NATIVE_PLAYGROUND || process.env.BABYLON_NATIVE_TRANSPORT) {
         projects.push({
             name: "native",
             testMatch: "**/*native.test.ts",

@@ -9,6 +9,20 @@ const startupTimeout = 30_000;
 const shutdownTimeout = 5_000;
 type PageFunction<Arg, R> = string | ((arg: Arg) => R | Promise<R>);
 
+export interface NativePageTransport {
+    request(method: string, fields: string[], timeoutMs: number): Promise<Buffer>;
+    abort(error: Error): void;
+    close(): Promise<void>;
+}
+
+interface NativePageTransportModule {
+    createTransport(onConsole: (level: string, text: string) => void, signal: AbortSignal): Promise<NativePageTransport>;
+}
+
+function isTransportModule(value: unknown): value is NativePageTransportModule {
+    return typeof value === "object" && value !== null && "createTransport" in value && typeof value.createTransport === "function";
+}
+
 interface PendingRequest {
     resolve: (payload: Buffer) => void;
     reject: (error: Error) => void;
@@ -46,8 +60,13 @@ export class NativePage {
     private terminalError?: Error;
     private closePromise?: Promise<void>;
     private readonly exitPromise: Promise<void>;
+    private transport?: NativePageTransport;
 
-    private constructor(private readonly process: ChildProcessWithoutNullStreams) {
+    private constructor(private readonly process?: ChildProcessWithoutNullStreams) {
+        if (!process) {
+            this.exitPromise = Promise.resolve();
+            return;
+        }
         this.exitPromise = new Promise((resolve) => {
             process.once("close", () => {
                 this.exited = true;
@@ -59,6 +78,22 @@ export class NativePage {
     }
 
     public static async launch(): Promise<NativePage> {
+        const transportModulePath = process.env.BABYLON_NATIVE_TRANSPORT;
+        if (transportModulePath) {
+            const transportModule: unknown = require(path.resolve(transportModulePath));
+            if (!isTransportModule(transportModule)) {
+                throw new Error("BABYLON_NATIVE_TRANSPORT must export createTransport(onConsole).");
+            }
+            const page = new NativePage();
+            const timeout = Number(process.env.BABYLON_NATIVE_STARTUP_TIMEOUT_MS || startupTimeout);
+            if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+                throw new Error("BABYLON_NATIVE_STARTUP_TIMEOUT_MS must be a positive integer.");
+            }
+            page.transport = await transportModule.createTransport((level, text) => {
+                page.events.emit("console", new NativeConsoleMessage(level, text));
+            }, AbortSignal.timeout(timeout));
+            return page;
+        }
         const executable = process.env.BABYLON_NATIVE_PLAYGROUND;
         if (!executable) {
             throw new Error("BABYLON_NATIVE_PLAYGROUND must point to a BabylonNative Playground executable built with Playwright bridge support.");
@@ -160,12 +195,20 @@ export class NativePage {
     public abort(error: Error): void {
         this.aborted = true;
         this.failPendingRequests(error);
-        if (!this.exited && this.process.pid) {
+        if (this.transport) {
+            this.transport.abort(error);
+        } else if (!this.exited && this.process?.pid) {
             this.process.kill("SIGKILL");
         }
     }
 
     public async close(): Promise<void> {
+        if (this.transport) {
+            this.closed = true;
+            this.failPendingRequests(new Error("BabylonNative is closing."));
+            this.closePromise ??= this.transport.close();
+            return this.closePromise;
+        }
         if (this.closed) {
             this.throwIfShutdownFailed();
             return;
@@ -175,15 +218,16 @@ export class NativePage {
     }
 
     private async closeProcess(): Promise<void> {
+        const process = this.getProcess();
         this.failPendingRequests(new Error("BabylonNative is closing."));
         // The host's stdin EOF handler posts WM_CLOSE without needing a JS-thread round trip.
-        this.process.stdin.end();
+        process.stdin.end();
         if (await this.waitForExit(shutdownTimeout)) {
             this.throwIfShutdownFailed();
             return;
         }
-        if (this.process.pid) {
-            this.process.kill("SIGKILL");
+        if (process.pid) {
+            process.kill("SIGKILL");
         }
         if (!(await this.waitForExit(shutdownTimeout))) {
             throw new Error("BabylonNative did not exit after forced termination.");
@@ -212,9 +256,10 @@ export class NativePage {
     }
 
     private async waitUntilReady(): Promise<void> {
-        const lines = readline.createInterface({ input: this.process.stdout });
+        const child = this.getProcess();
+        const lines = readline.createInterface({ input: child.stdout });
         lines.on("line", (line) => this.handleLine(line));
-        this.process.stderr.on("data", (chunk: Buffer) => process.stderr.write(`[BabylonNative] ${chunk.toString("utf8")}`));
+        child.stderr.on("data", (chunk: Buffer) => process.stderr.write(`[BabylonNative] ${chunk.toString("utf8")}`));
 
         await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error(`BabylonNative did not become ready within ${startupTimeout}ms.`)), startupTimeout);
@@ -270,6 +315,9 @@ export class NativePage {
         if (this.terminalError || this.exited) {
             return Promise.reject(this.terminalError ?? new Error("BabylonNative exited before the request could be sent."));
         }
+        if (this.transport) {
+            return this.transport.request(method, fields, this.defaultTimeout || 100_000);
+        }
 
         const id = this.nextRequestId++;
         return new Promise<Buffer>((resolve, reject) => {
@@ -281,7 +329,7 @@ export class NativePage {
                 }, requestTimeout);
             }
             this.pending.set(id, pending);
-            this.process.stdin.write([protocolPrefix.slice(0, -1), id, method, ...fields].join("\t") + "\n");
+            this.getProcess().stdin.write([protocolPrefix.slice(0, -1), id, method, ...fields].join("\t") + "\n");
         });
     }
 
@@ -298,7 +346,8 @@ export class NativePage {
     }
 
     private initializeExitHandler(): void {
-        this.process.once("exit", (code, signal) => {
+        const process = this.getProcess();
+        process.once("exit", (code, signal) => {
             this.exited = true;
             const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
             const error = new Error(`BabylonNative exited with ${detail}.`);
@@ -307,7 +356,14 @@ export class NativePage {
             }
             this.failPendingRequests(error);
         });
-        this.process.once("error", (error) => this.failPendingRequests(error));
-        this.process.stdin.once("error", (error) => this.abort(error));
+        process.once("error", (error) => this.failPendingRequests(error));
+        process.stdin.once("error", (error) => this.abort(error));
+    }
+
+    private getProcess(): ChildProcessWithoutNullStreams {
+        if (!this.process) {
+            throw new Error("This NativePage uses an external transport, not a child process.");
+        }
+        return this.process;
     }
 }
