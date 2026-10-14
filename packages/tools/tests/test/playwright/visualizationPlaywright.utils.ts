@@ -266,6 +266,9 @@ export const evaluatePlaywrightVisTests = async (
                     window.scene.dispose();
                 }
                 window.scene = null;
+                if ((globalThis as any).__babylonNativePlaywright && window.engine) {
+                    window.engine.setHardwareScalingLevel(1);
+                }
                 if (!(globalThis as any).__babylonNativePlaywright && window.engine && window.engine.dispose) {
                     window.engine.dispose();
                     window.engine = null;
