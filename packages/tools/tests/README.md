@@ -27,15 +27,18 @@ npx playwright test --config playwright.config.ts --project native
 Native uses the **same** goldens as browser visualization tests under
 `test/visualization/ReferenceImages/` — native output is expected to match web.
 
-Other native hosts can set `BABYLON_NATIVE_TRANSPORT` to an absolute CommonJS module path instead of an executable. The module exports `createTransport(onConsole, signal)` and returns the `NativePageTransport` contract in `nativePage.ts`: protocol requests, abort and asynchronous close. Each Playwright worker owns its transport; cloud adapters must release their device and tunnel before close completes. The shared scene definitions, snapshot assertions and native exclusion tags stay unchanged.
+Other native hosts can set `BABYLON_NATIVE_TRANSPORT` to an absolute CommonJS module path instead of an executable. The module exports `createTransport(onConsole, signal)` and returns the `NativePageTransport` contract in `nativePage.ts`: protocol requests, abort and asynchronous close. Each Playwright worker owns its transport. An external run owner may retain a device across worker replacement; transport close must reset and release that worker's lease, and the run owner must release every device and tunnel on exit. The shared scene definitions, snapshot assertions and native exclusion tags stay unchanged.
 
 `BABYLON_NATIVE_STARTUP_TIMEOUT_MS` sets the startup deadline (default 30 seconds). The factory must observe its abort signal and finish failed-startup cleanup before rejecting; the signal must not cancel subsequent session cleanup requests.
 
 The native project defaults to zero test retries (`--retries` can override this).
 Native scene-construction errors fail immediately rather than evaluating the same
 scene repeatedly; transient asset-request retries are unchanged. Browser projects
-retain their existing retry behavior. Failed native tests terminate their host
+retain their existing retry behavior. Failed native tests close their transport
 before Playwright replaces the worker, while successful tests reuse the engine.
+Executable hosts terminate; external transports may retain a reset run-owned device.
+Native framebuffer screenshots do not reproduce CSS canvas backgrounds; a test
+requesting `canvasBackgroundColor` fails explicitly rather than ignoring it.
 Native startup is lazy per worker inside `beforeEach`, so a host startup crash
 fails the current test instead of skipping the rest of a `beforeAll` group.
 Shutdown waits at most five seconds before forcing termination, then allows five

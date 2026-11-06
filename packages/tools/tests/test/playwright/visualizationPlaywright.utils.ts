@@ -317,13 +317,19 @@ export const evaluatePlaywrightVisTests = async (
                 }));
             log(rendererData.renderer);
 
-            await page.evaluate((backgroundColor?: string) => {
-                if (backgroundColor) {
-                    window.canvas?.style.setProperty("background-color", backgroundColor, "important");
-                } else {
-                    window.canvas?.style.removeProperty("background-color");
+            if (page instanceof NativePage) {
+                if (testCase.canvasBackgroundColor) {
+                    throw new Error("Native framebuffer screenshots do not support CSS canvasBackgroundColor.");
                 }
-            }, testCase.canvasBackgroundColor);
+            } else {
+                await page.evaluate((backgroundColor?: string) => {
+                    if (backgroundColor) {
+                        window.canvas?.style.setProperty("background-color", backgroundColor, "important");
+                    } else {
+                        window.canvas?.style.removeProperty("background-color");
+                    }
+                }, testCase.canvasBackgroundColor);
+            }
 
             if (optionalStateChanges?.beforeScene) {
                 if (!browserPage) {
