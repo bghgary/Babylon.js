@@ -1,5 +1,5 @@
 {
-    "$comment": "Pinned revision of the Khronos KHR_interactivity conformance assets. Read by scripts/runKHRInteractivityAssetTests.mjs (to fetch them) and by the CI pipeline (as a cache key), so both always agree. Bump this when syncing new assets from upstream.",
+    "$comment": "Pinned ratified Khronos KHR_interactivity conformance assets, including edge cases and must-reject invalid graphs. Run with production strict validation. Read by scripts/runKHRInteractivityAssetTests.mjs and CI as a shared cache key.",
     "repository": "https://github.com/KhronosGroup/glTF-Test-Assets-Interactivity.git",
-    "revision": "06d97879f6302cd3f735a5f25f624d10c4b3e092"
+    "revision": "08fa4edafba63fe50f7515fab75e4be8619755d0"
 }

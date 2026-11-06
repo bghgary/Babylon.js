@@ -1,7 +1,6 @@
 import { type IObjectInfo, type IPathToObjectConverter } from "core/ObjectModel/objectModelInterfaces";
 import { type IObjectAccessor } from "core/FlowGraph/typeDefinitions";
 import { type FlowGraphContext } from "core/FlowGraph/flowGraphContext";
-import { FlowGraphInteger } from "core/FlowGraph/CustomTypes/flowGraphInteger";
 import { EventReferencePrefix, DelayReferencePrefix } from "./KHR_interactivity/interactivityReferences";
 import { IsDelayActive } from "core/FlowGraph/flowGraphDelayRegistry";
 
@@ -37,9 +36,10 @@ export class InteractivityRefPathToObjectConverter implements IPathToObjectConve
      * @returns an object accessor whose `get` validates the reference
      */
     public convert(path: string): IObjectInfo<IObjectAccessor> {
+        const isEmptyEventReference = path === EventReferencePrefix;
         const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
 
-        if (normalized.startsWith(EventReferencePrefix)) {
+        if (isEmptyEventReference || normalized.startsWith(EventReferencePrefix)) {
             const key = normalized.substring(EventReferencePrefix.length);
             return {
                 object: RefValidityTarget,
@@ -48,7 +48,7 @@ export class InteractivityRefPathToObjectConverter implements IPathToObjectConve
                     isReadOnly: true,
                     // A non-empty key means a real event reference was supplied (the
                     // template substitution rejects null refs before we get here).
-                    get: () => (key.length > 0 ? normalized : undefined),
+                    get: () => (isEmptyEventReference ? path : key.length > 0 ? normalized : undefined),
                     getTarget: () => RefValidityTarget,
                 },
             };
@@ -68,7 +68,7 @@ export class InteractivityRefPathToObjectConverter implements IPathToObjectConve
                     if (!context || isNaN(index) || index < 0) {
                         return undefined;
                     }
-                    return IsDelayActive(context, index) ? new FlowGraphInteger(index) : undefined;
+                    return IsDelayActive(context, index) ? DelayReferencePrefix + index : undefined;
                 },
                 getTarget: () => RefValidityTarget,
             },

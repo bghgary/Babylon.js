@@ -12,6 +12,8 @@ import {
     type BoundingBoxRenderer,
     type AbstractEngine,
     type ClusteredLightContainer,
+    type Mesh,
+    type ISpriteManager,
 } from "core/index";
 import { UniformBuffer } from "../Materials/uniformBuffer";
 import { Observable } from "../Misc/observable";
@@ -103,6 +105,13 @@ export class ObjectRenderer {
      * Note that the particle systems are rendered only if renderParticles is set to true.
      */
     public particleSystemList: Nullable<Array<IParticleSystem>> = null;
+
+    /**
+     * Define the list of sprite managers to render. If not provided, will render all the sprite managers of the scene.
+     * An empty array will render no sprite managers.
+     * Note that the sprite managers are rendered only if renderSprites is set to true.
+     */
+    public spriteManagerList: Nullable<Array<ISpriteManager>> = null;
 
     /**
      * Use this function to overload the renderList array at rendering time.
@@ -501,6 +510,11 @@ export class ObjectRenderer {
         ubo.addUniform("projection", 16);
         ubo.addUniform("vEyePosition", 4);
         ubo.addUniform("inverseProjection", 16);
+        // the temporal data of the view, for WGSL shaders (see Scene.finalizeSceneUbo)
+        if (engine.isWebGPU) {
+            ubo.addUniform("previousViewProjection", 16);
+            ubo.addUniform("taaJitter", 2);
+        }
         return ubo;
     }
 
@@ -596,11 +610,18 @@ export class ObjectRenderer {
      */
     public isReadyForRendering(viewportWidth: number, viewportHeight: number): boolean {
         this.prepareRenderList();
+
+        // no draw: the view histories must not advance
+        const viewHistoryIsReadOnly = this._scene._viewHistoryIsReadOnly;
+        this._scene._viewHistoryIsReadOnly = true;
+
         this.initRender(viewportWidth, viewportHeight);
 
         const isReady = this._checkReadiness();
 
         this.finishRender();
+
+        this._scene._viewHistoryIsReadOnly = viewHistoryIsReadOnly;
 
         return isReady;
     }
@@ -653,6 +674,7 @@ export class ObjectRenderer {
 
     private _defaultRenderListPrepared: boolean;
     private _currentSceneCamera: Nullable<Camera> = null;
+    private _currentViewPassId = Constants.RENDERPASS_MAIN;
 
     /**
      * This method makes sure everything is setup before "render" can be called
@@ -681,6 +703,10 @@ export class ObjectRenderer {
             this._engine.setViewport(camera.rigParent ? camera.rigParent.viewport : camera.viewport, viewportWidth, viewportHeight);
         }
 
+        // the cameras keep a view history per object renderer
+        this._currentViewPassId = this._scene._viewPassId;
+        this._scene._viewPassId = this.renderPassId;
+
         if (this._useUBO) {
             this._scene.finalizeSceneUbo();
         }
@@ -697,6 +723,8 @@ export class ObjectRenderer {
         if (this._useUBO) {
             this._scene.setSceneUniformBuffer(this._currentSceneUBO);
         }
+
+        this._scene._viewPassId = this._currentViewPassId;
 
         if (this._disableImageProcessing) {
             scene.imageProcessingConfiguration._applyByPostProcess = this._currentApplyByPostProcessSetting;
@@ -752,7 +780,8 @@ export class ObjectRenderer {
                 this.renderOpaqueMeshes,
                 this.renderAlphaTestMeshes,
                 this.renderTransparentMeshes,
-                this.customRenderTransparentSubMeshes
+                this.customRenderTransparentSubMeshes,
+                this.spriteManagerList
             );
             this.onAfterRenderingManagerRenderObservable.notifyObservers(passIndex);
 
@@ -825,6 +854,46 @@ export class ObjectRenderer {
                     returnValue = false;
                     continue;
                 }
+
+                let edgesRenderer = mesh._edgesRenderer;
+                let useInstances = mesh.hasThinInstances;
+                if (mesh.isAnInstance) {
+                    const sourceMesh = (mesh as InstancedMesh).sourceMesh;
+                    if (sourceMesh.edgesShareWithInstances && sourceMesh._edgesRenderer?.isEnabled) {
+                        edgesRenderer = sourceMesh._edgesRenderer;
+                        useInstances = true;
+                    }
+                } else if (mesh.hasInstances && (mesh as Mesh).edgesShareWithInstances) {
+                    useInstances = true;
+                }
+                if (!this.customRenderFunction && this.renderOpaqueMeshes && edgesRenderer?.isEnabled) {
+                    if (!edgesRenderer.isReady(useInstances)) {
+                        returnValue = false;
+                    }
+                }
+            }
+
+            if (this.renderParticles && scene.particlesEnabled) {
+                const particleSystems = this.particleSystemList || scene.particleSystems;
+                for (const particleSystem of particleSystems) {
+                    if (!particleSystem.isReady()) {
+                        returnValue = false;
+                    }
+                }
+            }
+
+            if (this.renderSprites && scene.spritesEnabled) {
+                const spriteManagers = this.spriteManagerList || scene.spriteManagers;
+                if (spriteManagers) {
+                    for (const spriteManager of spriteManagers) {
+                        if (scene.activeCamera && (spriteManager.layerMask & scene.activeCamera.layerMask) === 0) {
+                            continue;
+                        }
+                        if (spriteManager.isReady && !spriteManager.isReady()) {
+                            returnValue = false;
+                        }
+                    }
+                }
             }
 
             this.onAfterRenderObservable.notifyObservers(passIndex);
@@ -832,13 +901,6 @@ export class ObjectRenderer {
             if (numPasses > 1) {
                 scene.incrementRenderId();
                 scene.resetCachedMaterial();
-            }
-        }
-
-        const particleSystems = this.particleSystemList || scene.particleSystems;
-        for (const particleSystem of particleSystems) {
-            if (!particleSystem.isReady()) {
-                returnValue = false;
             }
         }
 

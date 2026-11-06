@@ -340,6 +340,7 @@ export function RegisterThinInstanceMesh(): void {
                 this._thinInstanceDataStorage.previousMatrixBuffer = this._thinInstanceCreateMatrixBuffer("previousWorld", buffer, staticBuffer);
             }
         } else if (kind === "splatIndex" && buffer) {
+            this._thinInstanceDataStorage.matrixBuffer?.dispose();
             this._thinInstanceInitializeUserStorage();
             this._thinInstanceDataStorage.instancesCount = buffer.length / stride;
             this._userThinInstanceBuffersStorage.data[kind] = buffer;
@@ -379,11 +380,13 @@ export function RegisterThinInstanceMesh(): void {
     };
 
     Mesh.prototype.thinInstanceBufferUpdated = function (kind: string): void {
+        // With no visible instance, upload the whole buffer: nothing else re-syncs it when the count goes back up
+        const instancesCount = this._thinInstanceDataStorage.instancesCount || undefined;
         if (kind === "matrix") {
             if (this.thinInstanceAllowAutomaticStaticBufferRecreation && this._thinInstanceDataStorage.matrixBuffer && !this._thinInstanceDataStorage.matrixBuffer.isUpdatable()) {
                 this._thinInstanceRecreateBuffer(kind);
             }
-            this._thinInstanceDataStorage.matrixBuffer?.updateDirectly(this._thinInstanceDataStorage.matrixData!, 0, this._thinInstanceDataStorage.instancesCount);
+            this._thinInstanceDataStorage.matrixBuffer?.updateDirectly(this._thinInstanceDataStorage.matrixData!, 0, instancesCount);
         } else if (kind === "previousMatrix") {
             if (
                 this.thinInstanceAllowAutomaticStaticBufferRecreation &&
@@ -392,9 +395,9 @@ export function RegisterThinInstanceMesh(): void {
             ) {
                 this._thinInstanceRecreateBuffer(kind);
             }
-            this._thinInstanceDataStorage.previousMatrixBuffer?.updateDirectly(this._thinInstanceDataStorage.previousMatrixData!, 0, this._thinInstanceDataStorage.instancesCount);
+            this._thinInstanceDataStorage.previousMatrixBuffer?.updateDirectly(this._thinInstanceDataStorage.previousMatrixData!, 0, instancesCount);
         } else if (kind === "splatIndex") {
-            this._thinInstanceDataStorage.matrixBuffer?.updateDirectly(this._userThinInstanceBuffersStorage.data[kind], 0, this._thinInstanceDataStorage.instancesCount);
+            this._thinInstanceDataStorage.matrixBuffer?.updateDirectly(this._userThinInstanceBuffersStorage.data[kind], 0, instancesCount);
         } else {
             // preserve backward compatibility
             if (kind === VertexBuffer.ColorKind) {

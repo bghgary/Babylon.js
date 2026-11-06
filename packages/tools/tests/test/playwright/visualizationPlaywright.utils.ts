@@ -317,6 +317,14 @@ export const evaluatePlaywrightVisTests = async (
                 }));
             log(rendererData.renderer);
 
+            await page.evaluate((backgroundColor?: string) => {
+                if (backgroundColor) {
+                    window.canvas?.style.setProperty("background-color", backgroundColor, "important");
+                } else {
+                    window.canvas?.style.removeProperty("background-color");
+                }
+            }, testCase.canvasBackgroundColor);
+
             if (optionalStateChanges?.beforeScene) {
                 if (!browserPage) {
                     throw new Error("Native visualization tests do not support browser-only beforeScene hooks.");

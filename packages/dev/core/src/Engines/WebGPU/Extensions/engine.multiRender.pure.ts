@@ -209,7 +209,6 @@ export function RegisterEnginesWebGPUExtensionsEngineMultiRender(): void {
         if (depthStencilTexture) {
             depthStencilTexture.incrementReferences();
             textures[textureCount] = depthStencilTexture;
-            this._internalTexturesCache.push(depthStencilTexture);
         }
 
         rtWrapper.setTextures(textures);
@@ -294,6 +293,11 @@ export function RegisterEnginesWebGPUExtensionsEngineMultiRender(): void {
         } else {
             // the render pass is not created yet so we don't need to call setMRTAttachments: it will be called as part of the render pass creation (see WebGPUEngine._startRenderTargetRenderPass)
         }
+    };
+
+    WebGPUEngine.prototype.clearAttachments = function (color, attachments, clearColor, clearDepth, clearStencil = false, stencilClearValue = 0): void {
+        this.bindAttachments(attachments);
+        this.clear(color, clearColor, clearDepth, clearStencil, stencilClearValue);
     };
 
     WebGPUEngine.prototype.buildTextureLayout = function (textureStatus: boolean[], backBufferLayout = false): number[] {

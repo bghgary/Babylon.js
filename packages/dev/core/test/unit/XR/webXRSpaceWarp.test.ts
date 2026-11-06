@@ -40,6 +40,7 @@ describe("WebXRSpaceWarp", () => {
     let sessionManager: WebXRSessionManager;
     let originalWebGLBinding: unknown;
     let originalGPUBinding: unknown;
+    let originalGPUSubImage: unknown;
 
     beforeEach(() => {
         engine = new NullEngine({
@@ -54,12 +55,17 @@ describe("WebXRSpaceWarp", () => {
         (sessionManager as unknown as { _xrNavigator: unknown })._xrNavigator = { xr: { native: false } };
         originalWebGLBinding = (globalThis as unknown as { XRWebGLBinding?: unknown }).XRWebGLBinding;
         originalGPUBinding = (globalThis as unknown as { XRGPUBinding?: unknown }).XRGPUBinding;
+        originalGPUSubImage = (globalThis as unknown as { XRGPUSubImage?: unknown }).XRGPUSubImage;
+        const subImage = vi.fn();
+        subImage.prototype.getViewDescriptor = vi.fn();
+        (globalThis as unknown as { XRGPUSubImage: unknown }).XRGPUSubImage = subImage;
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
         (globalThis as unknown as { XRWebGLBinding?: unknown }).XRWebGLBinding = originalWebGLBinding;
         (globalThis as unknown as { XRGPUBinding?: unknown }).XRGPUBinding = originalGPUBinding;
+        (globalThis as unknown as { XRGPUSubImage?: unknown }).XRGPUSubImage = originalGPUSubImage;
         scene.dispose();
         engine.dispose();
     });
@@ -124,6 +130,8 @@ describe("WebXRSpaceWarp", () => {
             };
         });
         xrGPUBinding.prototype.createProjectionLayer = createProjectionLayer;
+        xrGPUBinding.prototype.getViewSubImage = vi.fn();
+        xrGPUBinding.prototype.getPreferredColorFormat = getPreferredColorFormat;
         (globalThis as unknown as { XRGPUBinding: unknown }).XRGPUBinding = xrGPUBinding;
         (engine as unknown as { _isWebGPU: boolean })._isWebGPU = true;
         (engine as unknown as { _device: GPUDevice })._device = {} as GPUDevice;
@@ -215,6 +223,14 @@ describe("WebXRSpaceWarp", () => {
         expect(feature.detach()).toBe(true);
         expect(sessionManager.onXRFrameObservable.hasObservers()).toBe(false);
         expect(scene.onAfterRenderObservable.hasObservers()).toBe(false);
+        expect(scene.needsPreviousWorldMatrices).toBe(false);
+
+        expect(feature.attach()).toBe(true);
+        scene.needsPreviousWorldMatrices = true;
+        expect(feature.detach()).toBe(true);
+        expect(scene.needsPreviousWorldMatrices).toBe(true);
+        scene.needsPreviousWorldMatrices = false;
+        expect(scene.needsPreviousWorldMatrices).toBe(false);
     });
 
     it("keeps the native projection-layer sub-image provider behavior", () => {

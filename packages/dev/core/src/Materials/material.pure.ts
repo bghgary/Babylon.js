@@ -1380,14 +1380,16 @@ export class Material implements IAnimatable, IClipPlanesHolder {
                 continue;
             }
             for (const subMesh of mesh.subMeshes) {
-                if (subMesh.getMaterial() !== this) {
-                    continue;
-                }
-
-                for (const drawWrapper of subMesh._drawWrappers) {
+                for (let passId = 0; passId < subMesh._drawWrappers.length; passId++) {
+                    const drawWrapper = subMesh._drawWrappers[passId];
                     if (!drawWrapper) {
                         continue;
                     }
+
+                    if (subMesh.getMaterial(true, passId) !== this) {
+                        continue;
+                    }
+
                     if (this._materialContext === drawWrapper.materialContext) {
                         drawWrapper._wasPreviouslyReady = false;
                         drawWrapper._wasPreviouslyUsingInstances = null;
@@ -1404,12 +1406,20 @@ export class Material implements IAnimatable, IClipPlanesHolder {
 
     /**
      * @internal
+     * Whether a draw with a side orientation (the material's when null) reverses its front faces, as _preBind sets it
+     */
+    public _isReverseSide(overrideOrientation: Nullable<number> = null): boolean {
+        const orientation = overrideOrientation == null ? this.sideOrientation : overrideOrientation;
+        return orientation === Material.ClockWiseSideOrientation;
+    }
+
+    /**
+     * @internal
      */
     public _preBind(effect?: Effect | DrawWrapper, overrideOrientation: Nullable<number> = null): boolean {
         const engine = this._scene.getEngine();
 
-        const orientation = overrideOrientation == null ? this.sideOrientation : overrideOrientation;
-        const reverse = orientation === Material.ClockWiseSideOrientation;
+        const reverse = this._isReverseSide(overrideOrientation);
 
         const effectiveDrawWrapper = effect ? effect : this._getDrawWrapper();
 
@@ -1849,11 +1859,17 @@ export class Material implements IAnimatable, IClipPlanesHolder {
                 continue;
             }
             for (const subMesh of mesh.subMeshes) {
-                if (subMesh.getMaterial() !== this) {
-                    continue;
-                }
+                for (let passId = 0; passId < subMesh._drawWrappers.length; passId++) {
+                    const drawWrapper = subMesh._drawWrappers[passId];
+                    if (!drawWrapper) {
+                        continue;
+                    }
 
-                subMesh.resetDrawCache();
+                    if (subMesh.getMaterial(true, passId) !== this) {
+                        continue;
+                    }
+                    subMesh.resetDrawCache(passId);
+                }
             }
         }
     }
@@ -1874,16 +1890,24 @@ export class Material implements IAnimatable, IClipPlanesHolder {
                 continue;
             }
             for (const subMesh of mesh.subMeshes) {
-                // We want to skip the submeshes which are not using this material or which have not yet rendered at least once
-                const material = subMesh.getMaterial() || (scene._hasDefaultMaterial ? scene.defaultMaterial : null);
-                if (material !== this) {
+                const drawWrappers = subMesh._drawWrappers;
+                // Skip the submeshes that have not rendered yet, and those with no render pass that can resolve to this material,
+                // without resolving each pass
+                if (!drawWrappers.length || !subMesh._mayRenderWithMaterial(this)) {
                     continue;
                 }
 
-                for (const drawWrapper of subMesh._drawWrappers) {
-                    if (!drawWrapper || !drawWrapper.defines || !(drawWrapper.defines as MaterialDefines).markAllAsDirty) {
+                // We want to skip the submeshes which are not using this material or which have not yet rendered at least once
+                for (let passId = 0; passId < drawWrappers.length; passId++) {
+                    const drawWrapper = drawWrappers[passId];
+                    if (!drawWrapper) {
                         continue;
                     }
+
+                    if (subMesh.getMaterial(true, passId) !== this || !drawWrapper.defines || !(drawWrapper.defines as MaterialDefines).markAllAsDirty) {
+                        continue;
+                    }
+
                     if (this._materialContext === drawWrapper.materialContext) {
                         func(drawWrapper.defines as MaterialDefines);
                     }

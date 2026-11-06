@@ -67,6 +67,7 @@ export class SubMesh implements ICullable {
             this._drawWrappers[passId]?.dispose(immediate);
         }
         this._drawWrappers[passId] = undefined as any;
+        this._currentMaterials[passId] = undefined as any;
     }
 
     /**
@@ -91,6 +92,35 @@ export class SubMesh implements ICullable {
      */
     public _setMainDrawWrapperOverride(wrapper: Nullable<DrawWrapper>): void {
         this._mainDrawWrapperOverride = wrapper;
+    }
+
+    /** Invalidates vertex bindings for submesh- and material-owned draws without releasing their resources. @internal */
+    public _invalidateVertexBuffers(): void {
+        for (const drawWrapper of this._drawWrappers) {
+            drawWrapper?.drawContext?._invalidateVertexBuffers?.();
+        }
+        this._mainDrawWrapperOverride?.drawContext?._invalidateVertexBuffers?.();
+
+        const scene = this._mesh.getScene();
+        this._invalidateMaterialVertexBuffers(this._renderingMesh.material ?? (scene._hasDefaultMaterial ? scene.defaultMaterial : null));
+        const passMaterials = this._renderingMesh._internalAbstractMeshDataInfo._materialForRenderPass;
+        if (passMaterials) {
+            for (const material of passMaterials) {
+                this._invalidateMaterialVertexBuffers(material);
+            }
+        }
+    }
+
+    private _invalidateMaterialVertexBuffers(material: Nullable<Material> | undefined): void {
+        if (material && this._isMultiMaterial(material)) {
+            material = material.getSubMaterial(this.materialIndex);
+        }
+        if (material) {
+            if (!material._storeEffectOnSubMeshes) {
+                material._getDrawWrapper().drawContext?._invalidateVertexBuffers?.();
+            }
+            material.shadowDepthWrapper?._invalidateVertexBuffers(this);
+        }
     }
 
     /**
@@ -129,6 +159,7 @@ export class SubMesh implements ICullable {
             }
         }
         this._drawWrappers = [];
+        this._currentMaterials = [];
     }
 
     /** @internal */
@@ -155,7 +186,7 @@ export class SubMesh implements ICullable {
     /** @internal */
     public _id: number;
 
-    private _currentMaterial: Nullable<Material> = null;
+    private _currentMaterials: Array<Nullable<Material>>;
 
     /**
      * Add a new submesh to a mesh
@@ -296,25 +327,41 @@ export class SubMesh implements ICullable {
     /**
      * Returns the submesh material
      * @param getDefaultMaterial Defines whether or not to get the default material if nothing has been defined.
+     * @param passId Optional render pass id to get the material with. If undefined, the engine's current render pass id is used.
      * @returns null or the current material
      */
-    public getMaterial(getDefaultMaterial = true): Nullable<Material> {
-        const rootMaterial = this._renderingMesh.getMaterialForRenderPass(this._engine.currentRenderPassId) ?? this._renderingMesh.material;
+    public getMaterial(getDefaultMaterial = true, passId?: number): Nullable<Material> {
+        if (passId === undefined) {
+            passId = this._engine.currentRenderPassId;
+        }
+
+        const rootMaterial = this._renderingMesh.getMaterialForRenderPass(passId) ?? this._renderingMesh.material;
 
         if (!rootMaterial) {
             return getDefaultMaterial && this._mesh.getScene()._hasDefaultMaterial ? this._mesh.getScene().defaultMaterial : null;
         } else if (this._isMultiMaterial(rootMaterial)) {
             const effectiveMaterial = rootMaterial.getSubMaterial(this.materialIndex);
 
-            if (this._currentMaterial !== effectiveMaterial) {
-                this._currentMaterial = effectiveMaterial;
-                this.resetDrawCache();
+            if (this._currentMaterials[passId] !== effectiveMaterial) {
+                this.resetDrawCache(passId);
+                this._currentMaterials[passId] = effectiveMaterial;
             }
 
             return effectiveMaterial;
         }
 
         return rootMaterial;
+    }
+
+    /**
+     * Checks whether this submesh can resolve to the given material in a render pass it has a draw wrapper for, without resolving
+     * each pass. A submesh that customizes getMaterial is always a candidate; otherwise its rendering mesh decides.
+     * @param material defines the material to check
+     * @returns false when no render pass with a draw wrapper can resolve to the material
+     * @internal
+     */
+    public _mayRenderWithMaterial(material: Material): boolean {
+        return this.getMaterial !== SubMesh.prototype.getMaterial || this._renderingMesh._mayRenderWithMaterial(material, this._drawWrappers);
     }
 
     private _isMultiMaterial(material: Material): material is MultiMaterial {

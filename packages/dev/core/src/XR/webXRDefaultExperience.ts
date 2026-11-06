@@ -1,14 +1,18 @@
 import { WebXRExperienceHelper } from "./webXRExperienceHelper";
 import { type Scene } from "../scene";
 import { type IWebXRInputOptions, WebXRInput } from "./webXRInput";
-import { type IWebXRControllerPointerSelectionOptions, WebXRControllerPointerSelection } from "./features/WebXRControllerPointerSelection.pure";
-import { type IWebXRNearInteractionOptions, WebXRNearInteraction } from "./features/WebXRNearInteraction.pure";
+import {
+    type IWebXRControllerPointerSelectionOptions,
+    RegisterWebXRControllerPointerSelection,
+    WebXRControllerPointerSelection,
+} from "./features/WebXRControllerPointerSelection.pure";
+import { type IWebXRNearInteractionOptions, RegisterWebXRNearInteraction, WebXRNearInteraction } from "./features/WebXRNearInteraction.pure";
 import { type WebXRRenderTarget } from "./webXRTypes";
 import { type WebXREnterExitUIOptions, WebXREnterExitUI } from "./webXREnterExitUI";
 import { type AbstractMesh } from "../Meshes/abstractMesh";
 import { type WebXRManagedOutputCanvasOptions } from "./webXRManagedOutputCanvas";
-import { type IWebXRTeleportationOptions, WebXRMotionControllerTeleportation } from "./features/WebXRControllerTeleportation.pure";
-import { WebXRHandTracking, type IWebXRHandTrackingOptions } from "./features/WebXRHandTracking.pure";
+import { type IWebXRTeleportationOptions, RegisterWebXRControllerTeleportation, WebXRMotionControllerTeleportation } from "./features/WebXRControllerTeleportation.pure";
+import { RegisterWebXRHandTracking, WebXRHandTracking, type IWebXRHandTrackingOptions } from "./features/WebXRHandTracking.pure";
 import { Logger } from "../Misc/logger";
 
 /**
@@ -74,7 +78,11 @@ export class WebXRDefaultExperienceOptions {
      */
     public outputCanvasOptions?: WebXRManagedOutputCanvasOptions;
     /**
-     * optional UI options. This can be used among other to change session mode and reference space type
+     * Options for the default enter/exit UI, including session mode and reference space type.
+     * Set `onError` here to receive XR entry failures (including WebGPU session negotiation failures)
+     * when the default button is used. The application can then notify the user or create a new
+     * WebGL engine and scene; Babylon.js cannot switch an existing scene's rendering backend.
+     * When `disableDefaultUI` is true, handle rejections from `baseExperience.enterXRAsync()` instead.
      */
     public uiOptions?: Partial<WebXREnterExitUIOptions>;
     /**
@@ -137,6 +145,11 @@ export class WebXRDefaultExperience {
      * @returns resulting WebXRDefaultExperience
      */
     public static async CreateAsync(scene: Scene, options: WebXRDefaultExperienceOptions = {}) {
+        RegisterWebXRControllerPointerSelection();
+        RegisterWebXRControllerTeleportation();
+        RegisterWebXRNearInteraction();
+        RegisterWebXRHandTracking();
+
         const result = new WebXRDefaultExperience();
         scene.onDisposeObservable.addOnce(() => {
             result.dispose();

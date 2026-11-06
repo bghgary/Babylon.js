@@ -1,7 +1,7 @@
 /** This file must only contain pure code and pure imports */
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { type Nullable } from "./types";
+import { type DeepImmutable, type Nullable } from "./types";
 import { Tools } from "./Misc/tools.pure";
 import { TimingTools, _RetryWithInterval } from "./Misc/timingTools";
 import { type IAnimatable } from "./Animations/animatable.interface";
@@ -10,7 +10,7 @@ import { type Observer, Observable } from "./Misc/observable.pure";
 import { type ISmartArrayLike, SmartArrayNoDuplicate, SmartArray } from "./Misc/smartArray";
 import { StringDictionary } from "./Misc/stringDictionary";
 import { Tags } from "./Misc/tags";
-import { type Vector2, Vector3, Vector4, Matrix } from "./Maths/math.vector.pure";
+import { Vector2, Vector3, Vector4, Matrix } from "./Maths/math.vector.pure";
 import { type IParticleSystem } from "./Particles/IParticleSystem";
 import { ImageProcessingConfiguration } from "./Materials/imageProcessingConfiguration.pure";
 import { UniformBuffer } from "./Materials/uniformBuffer";
@@ -71,6 +71,7 @@ import { type PerformanceViewerCollector } from "./Misc/PerformanceViewer/perfor
 import { type MorphTarget } from "./Morph/morphTarget";
 import { type MorphTargetManager } from "./Morph/morphTargetManager";
 import { type PostProcess } from "./PostProcesses/postProcess.pure";
+import { type TAAMaterialManager } from "./PostProcesses/RenderPipeline/Pipelines/taaMaterialManager.pure";
 import { type Material } from "./Materials/material.pure";
 import { type BaseTexture } from "./Materials/Textures/baseTexture.pure";
 import { type Geometry } from "./Meshes/geometry";
@@ -84,6 +85,7 @@ import { type SubMesh } from "./Meshes/subMesh.pure";
 import { type Node } from "./node";
 import { type Animation } from "./Animations/animation.pure";
 import { type Animatable } from "./Animations/animatable.core";
+import { type IRuntimeAnimationWrite } from "./Animations/runtimeAnimation";
 import { type Texture } from "./Materials/Textures/texture.pure";
 import { PointerPickingConfiguration } from "./Inputs/pointerPickingConfiguration";
 import { Logger } from "./Misc/logger";
@@ -250,6 +252,23 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
 
     /** @internal */
     public _blockEntityCollection = false;
+
+    /**
+     * Executes a synchronous action without allowing it to weaken an existing entity-collection block.
+     * @param blockEntityCollection whether the action requires entity collection to be blocked
+     * @param action the action to execute
+     * @returns the action result
+     * @internal
+     */
+    public _executeWithBlockedEntityCollection<T>(blockEntityCollection: boolean, action: () => T): T {
+        const previousBlockEntityCollection = this._blockEntityCollection;
+        this._blockEntityCollection = previousBlockEntityCollection || blockEntityCollection;
+        try {
+            return action();
+        } finally {
+            this._blockEntityCollection = previousBlockEntityCollection;
+        }
+    }
 
     /**
      * Gets or sets a boolean that indicates if the scene must clear the render buffer before rendering a frame
@@ -1291,9 +1310,90 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
         const offset = this.floatingOriginOffset;
         ubo.updateFloat4("vEyePosition", eyePosition.x - offset.x, eyePosition.y - offset.y, eyePosition.z - offset.z, eyePosition.w);
 
+        // The temporal data of the view, read by WGSL shaders only (WebGPU): the camera's view-projection in the previous frame and the TAA jitter.
+        // A pass that does not render the camera's view (shadow map, mirror, probe face) gets no camera motion and no jitter.
+        if (this._engine.isWebGPU) {
+            const camera = this._activeCamera;
+            const cameraView = camera && this._viewMatrix === camera._computedViewMatrix ? camera : null;
+            ubo.updateMatrix("previousViewProjection", cameraView ? this._getPreviousViewProjection(cameraView) : this._transformMatrix);
+            const jitter = cameraView ? this._getTaaJitter(cameraView) : Vector2.ZeroReadOnly;
+            ubo.updateFloat2("taaJitter", jitter.x, jitter.y);
+        }
+
         ubo.update();
 
         return ubo;
+    }
+
+    /** @internal The pass the scene UBO is finalized for: cameras keep a view history per pass (object renderers set theirs) */
+    public _viewPassId: number = Constants.RENDERPASS_MAIN;
+
+    /** @internal True during readiness checks: the view histories are read, not advanced */
+    public _viewHistoryIsReadOnly = false;
+
+    /** @internal The TAA material manager of the scene's materials (the last one created): WGSL materials get its jitter from the scene UBO */
+    public _taaMaterialManager: Nullable<TAAMaterialManager> = null;
+
+    /**
+     * Gets the camera's view-projection of the previous frame in the current pass, advancing the history on its first use in a frame.
+     * It starts again when the camera did not render in that pass in the previous frame.
+     * @param camera the camera whose view is being rendered
+     * @returns the previous view-projection
+     */
+    private _getPreviousViewProjection(camera: Camera): Matrix {
+        const frameId = this._engine.frameId;
+        const transform = this._transformMatrix;
+        const histories = camera._viewHistories;
+        const history = histories.get(this._viewPassId);
+        if (this._viewHistoryIsReadOnly) {
+            return history && history.frameId === frameId ? history.previous : transform;
+        }
+        if (!history) {
+            // the first render of the camera in this pass: drop the histories of the passes it stopped rendering in
+            histories.forEach((other, passId) => {
+                if (other.frameId < frameId - 1) {
+                    histories.delete(passId);
+                }
+            });
+            const started = { previous: transform.clone(), current: transform.clone(), frameId, seeded: true };
+            histories.set(this._viewPassId, started);
+            return started.previous;
+        }
+        if (history.frameId < frameId - 1) {
+            // the camera did not render in this pass in the previous frame (a refresh rate, a camera switch): start again, in the same matrices
+            history.previous.copyFrom(transform);
+            history.current.copyFrom(transform);
+            history.frameId = frameId;
+            history.seeded = true;
+        } else if (history.frameId !== frameId) {
+            history.previous.copyFrom(history.current);
+            history.current.copyFrom(transform);
+            history.frameId = frameId;
+            history.seeded = false;
+        } else if (history.current.updateFlag !== transform.updateFlag) {
+            // the transform changed within the pass (camera moved, or the target's aspect ratio applied); a history seeded in this
+            // frame has no rendered view before it, so both follow the final view
+            history.current.copyFrom(transform);
+            if (history.seeded) {
+                history.previous.copyFrom(transform);
+            }
+        }
+        return history.previous;
+    }
+
+    /**
+     * Gets the TAA jitter of a camera's view, from the scene's TAA material manager. A TAA post-process computes it for each of its cameras, and
+     * the views of that camera (each eye of a rig) get it. With the prepass, it computes it after the draws of its frame: the jitter applies until
+     * the end of the next frame. The jitter of a manager used on its own applies to every camera's view.
+     * @param camera the camera whose view is being rendered
+     * @returns the jitter, in clip space
+     */
+    private _getTaaJitter(camera: Camera): DeepImmutable<Vector2> {
+        const manager = this._taaMaterialManager;
+        if (!manager?.isEnabled) {
+            return Vector2.ZeroReadOnly;
+        }
+        return manager._getCameraJitter(camera, this._engine.frameId);
     }
 
     // Mirror
@@ -1435,10 +1535,36 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
         return !!this.prePassRenderer && this.prePassRenderer.defaultRT.enabled;
     }
 
+    private _needsPreviousWorldMatrices = false;
+    private _manualPreviousWorldMatrices = false;
+    private readonly _previousWorldMatricesOwners = new Set<object>();
+
     /**
-     * Flag indicating if we need to store previous matrices when rendering
+     * Flag indicating if we need to store previous matrices when rendering.
+     * Setting it directly controls the manual requirement; renderers can independently request previous matrices.
      */
-    public needsPreviousWorldMatrices = false;
+    public get needsPreviousWorldMatrices(): boolean {
+        return this._needsPreviousWorldMatrices;
+    }
+
+    public set needsPreviousWorldMatrices(value: boolean) {
+        this._manualPreviousWorldMatrices = value;
+        this._needsPreviousWorldMatrices = value || this._previousWorldMatricesOwners.size > 0;
+    }
+
+    /**
+     * @internal
+     * @param owner The renderer or frame graph requesting previous world matrices
+     * @param required Whether that owner still needs previous world matrices
+     */
+    public _setPreviousWorldMatricesRequired(owner: object, required: boolean): void {
+        if (required) {
+            this._previousWorldMatricesOwners.add(owner);
+        } else {
+            this._previousWorldMatricesOwners.delete(owner);
+        }
+        this._needsPreviousWorldMatrices = this._manualPreviousWorldMatrices || this._previousWorldMatricesOwners.size > 0;
+    }
 
     // Lights
     private _shadowsEnabled = true;
@@ -1795,6 +1921,20 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
 
     /** @internal */
     public _activeAnimatables = new Array<Animatable>();
+    /**
+     * @internal
+     * The writes of the runtime animations since the last animation step's bindings were processed - between steps
+     * and in the current or last step - in the order they were made: the first _animationWriteCount entries, the rest
+     * being reused. What the animations wrote, kept whatever became of them since, for as long as the bindings they
+     * registered are pending or just processed.
+     */
+    public _animationWrites = new Array<IRuntimeAnimationWrite>();
+    /** @internal How many of _animationWrites are in use. */
+    public _animationWriteCount = 0;
+    /** @internal How many of them, at the front, the last animation step's bindings processed; the next step lets them go. */
+    public _animationStepWriteCount = 0;
+    /** @internal Whether the current or last animation step evaluated the active animatables, which none does while animations are disabled. */
+    public _animationStepEvaluated = false;
 
     private _transformMatrix = Matrix.Zero();
     private _sceneUbo: UniformBuffer;
@@ -2914,6 +3054,11 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
         sceneUbo.addUniform("projection", 16);
         sceneUbo.addUniform("vEyePosition", 4);
         sceneUbo.addUniform("inverseProjection", 16);
+        // the temporal data of the view, for WGSL shaders (see finalizeSceneUbo)
+        if (this._engine.isWebGPU) {
+            sceneUbo.addUniform("previousViewProjection", 16);
+            sceneUbo.addUniform("taaJitter", 2);
+        }
         return sceneUbo;
     }
 
@@ -5703,6 +5848,8 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
             }
         }
 
+        this._inputManager._updateMeshUnderPointer();
+
         // Intersection checks
         this._checkIntersections();
 
@@ -5831,6 +5978,9 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
         this._renderTargets.dispose();
         this._materialsRenderTargets.dispose();
         this._registeredForLateAnimationBindings.dispose();
+        this._animationWrites.length = 0;
+        this._animationWriteCount = 0;
+        this._animationStepWriteCount = 0;
         this._meshesForIntersections.dispose();
         this._toBeDisposed.length = 0;
 

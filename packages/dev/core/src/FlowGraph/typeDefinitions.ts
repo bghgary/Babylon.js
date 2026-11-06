@@ -53,7 +53,7 @@ export interface IObjectAccessor<GLTFTargetType = any, BabylonTargetType = any, 
     /**
      * @deprecated Use get instead
      */
-    getPropertyName?: Array<(target: GLTFTargetType) => string>;
+    getPropertyName?: Array<(target: GLTFTargetType, index?: number) => string>;
     /**
      * Set a new value to the property.
      * @param newValue the new value to set
@@ -126,6 +126,10 @@ export interface ISerializedFlowGraphConnection {
      */
     connectedPointIds: string[];
     /**
+     * Optional host-format metadata associated with this connection.
+     */
+    metadata?: any;
+    /**
      * The serialized default value of a data connection (set by the user for
      * unconnected inputs).  Only present on data connections.
      */
@@ -187,6 +191,10 @@ export interface ISerializedFlowGraph {
      */
     uniqueId?: string;
     /**
+     * Optional host-format metadata associated with the graph.
+     */
+    metadata?: any;
+    /**
      * Contexts belonging to the flow graph
      */
     executionContexts: ISerializedFlowGraphContext[];
@@ -199,4 +207,31 @@ export interface ISerializedFlowGraph {
      * Is the flow graph in RHS mode?
      */
     rightHanded?: boolean;
+    /**
+     * Optional scene-reference provenance used to disambiguate duplicate nodes.
+     */
+    referenceProvenance?: SerializedFlowGraphReferenceProvenance;
 }
+
+/**
+ * Describes the authored identity of a serialized scene-node reference.
+ */
+export interface ISerializedFlowGraphReferenceLocation {
+    /** Node id at serialization time. */
+    id: string;
+    /** Node name at serialization time. */
+    name: string;
+    /** Babylon class name. */
+    className: string;
+    /** Zero-based occurrence among same-class nodes with the same id. */
+    idIndex: number;
+    /** Zero-based occurrence among same-class nodes with the same name. */
+    nameIndex: number;
+    /** Scene identifier when the reference was captured. */
+    sceneUid?: string;
+}
+
+/**
+ * Maps serialized node unique ids to their authored scene identity.
+ */
+export type SerializedFlowGraphReferenceProvenance = Array<[number, ISerializedFlowGraphReferenceLocation]>;

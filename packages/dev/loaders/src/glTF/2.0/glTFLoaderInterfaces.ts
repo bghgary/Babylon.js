@@ -7,6 +7,7 @@ import { type AbstractMesh } from "core/Meshes/abstractMesh";
 import { type Mesh } from "core/Meshes/mesh";
 import { type Camera } from "core/Cameras/camera";
 import { type Light } from "core/Lights/light";
+import { type BaseTexture } from "core/Materials/Textures/baseTexture";
 
 import type * as GLTF2 from "babylonjs-gltf2interface";
 
@@ -192,6 +193,9 @@ export interface INode extends GLTF2.INode, IArrayItem {
     _numMorphTargets?: number;
 
     /** @internal */
+    _morphTargetWeights?: number[];
+
+    /** @internal */
     _isJoint?: boolean;
 }
 
@@ -241,6 +245,16 @@ export interface ISkin extends GLTF2.ISkin, IArrayItem {
 export interface ITexture extends GLTF2.ITexture, IArrayItem {
     /** @internal */
     _textureInfo: ITextureInfo;
+
+    /** @internal */
+    _babylonTextures?: BaseTexture[];
+
+    /** @internal */
+    _babylonTextureSources?: {
+        babylonTexture: BaseTexture;
+        imageIndex: number;
+        samplerIndex?: number;
+    }[];
 }
 
 /**

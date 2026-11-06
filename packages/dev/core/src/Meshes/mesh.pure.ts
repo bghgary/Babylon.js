@@ -23,6 +23,7 @@ import { SubMesh } from "./subMesh.pure";
 import { type BoundingSphere } from "../Culling/boundingSphere";
 import { type Effect } from "../Materials/effect.pure";
 import { Material } from "../Materials/material.pure";
+import { MaterialHelperGeometryRendering } from "../Materials/materialHelper.geometryrendering";
 import { MultiMaterial } from "../Materials/multiMaterial.pure";
 import { SceneLoaderFlags } from "../Loading/sceneLoaderFlags";
 import { type Skeleton } from "../Bones/skeleton";
@@ -575,6 +576,24 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
     }
 
     /**
+     * @internal
+     * The side orientation the next draw of the mesh with a material passes to Material._preBind (see render): the material's, or else the mesh's,
+     * reversed when the world matrix of the effective mesh mirrors. It is the last one while the instance data is frozen, or while the material
+     * neither culls back faces, nor has a side orientation, nor lights both sides.
+     */
+    public _getDrawSideOrientation(material: Material, effectiveMesh: AbstractMesh = this): number {
+        if (this._instanceDataStorage.isFrozen || (!material.backFaceCulling && material.sideOrientation === null && !(material as any)._twoSidedLighting)) {
+            return this._internalMeshDataInfo._effectiveSideOrientation;
+        }
+        // Note: if two sided lighting is enabled, we need to ensure that the normal will point in the right direction even if the determinant of the world matrix is negative
+        const sideOrientation = material._getEffectiveOrientation(this);
+        if (effectiveMesh._getWorldMatrixDeterminant() < 0) {
+            return sideOrientation === Material.ClockWiseSideOrientation ? Material.CounterClockWiseSideOrientation : Material.ClockWiseSideOrientation;
+        }
+        return sideOrientation;
+    }
+
+    /**
      * @deprecated Please use sideOrientation instead.
      * @see https://doc.babylonjs.com/breaking-changes#7110
      */
@@ -786,6 +805,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
             this.metadata = source.metadata;
         }
         this._internalMetadata = source._internalMetadata;
+        this.meshBlendingTag = source.meshBlendingTag;
 
         // Tags
         if (Tags && Tags.HasTags(source)) {
@@ -2822,23 +2842,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
 
         const effectiveMesh = effectiveMeshReplacement || this;
 
-        let sideOrientation: Nullable<number>;
-
-        if (
-            !instanceDataStorage.isFrozen &&
-            (this._internalMeshDataInfo._effectiveMaterial.backFaceCulling ||
-                this._internalMeshDataInfo._effectiveMaterial.sideOrientation !== null ||
-                (this._internalMeshDataInfo._effectiveMaterial as any)._twoSidedLighting)
-        ) {
-            // Note: if two sided lighting is enabled, we need to ensure that the normal will point in the right direction even if the determinant of the world matrix is negative
-            const mainDeterminant = effectiveMesh._getWorldMatrixDeterminant();
-            sideOrientation = this._internalMeshDataInfo._effectiveMaterial._getEffectiveOrientation(this);
-
-            if (mainDeterminant < 0) {
-                sideOrientation = sideOrientation === Material.ClockWiseSideOrientation ? Material.CounterClockWiseSideOrientation : Material.ClockWiseSideOrientation;
-            }
-            this._internalMeshDataInfo._effectiveSideOrientation = sideOrientation!;
-        }
+        this._internalMeshDataInfo._effectiveSideOrientation = this._getDrawSideOrientation(this._internalMeshDataInfo._effectiveMaterial, effectiveMesh);
 
         const reverse = this._internalMeshDataInfo._effectiveMaterial._preBind(drawWrapper, this._internalMeshDataInfo._effectiveSideOrientation);
 
@@ -2866,18 +2870,24 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
             effectiveMaterial.bind(world, this);
         }
 
-        if (!effectiveMaterial.backFaceCulling && effectiveMaterial.separateCullingPass) {
-            engine.setState(true, effectiveMaterial.zOffset, false, !reverse, effectiveMaterial.cullBackFaces, effectiveMaterial.stencil, effectiveMaterial.zOffsetUnits);
-            this._processRendering(this, subMesh, effect, fillMode, batch, hardwareInstancedRendering, this._onBeforeDraw, this._internalMeshDataInfo._effectiveMaterial);
-            engine.setState(true, effectiveMaterial.zOffset, false, reverse, effectiveMaterial.cullBackFaces, effectiveMaterial.stencil, effectiveMaterial.zOffsetUnits);
+        try {
+            if (MaterialHelperGeometryRendering._BindAttachmentsForEffect(engine, effect)) {
+                if (!effectiveMaterial.backFaceCulling && effectiveMaterial.separateCullingPass) {
+                    engine.setState(true, effectiveMaterial.zOffset, false, !reverse, effectiveMaterial.cullBackFaces, effectiveMaterial.stencil, effectiveMaterial.zOffsetUnits);
+                    this._processRendering(this, subMesh, effect, fillMode, batch, hardwareInstancedRendering, this._onBeforeDraw, this._internalMeshDataInfo._effectiveMaterial);
+                    engine.setState(true, effectiveMaterial.zOffset, false, reverse, effectiveMaterial.cullBackFaces, effectiveMaterial.stencil, effectiveMaterial.zOffsetUnits);
 
-            if (this._internalMeshDataInfo._onBetweenPassObservable) {
-                this._internalMeshDataInfo._onBetweenPassObservable.notifyObservers(subMesh);
+                    if (this._internalMeshDataInfo._onBetweenPassObservable) {
+                        this._internalMeshDataInfo._onBetweenPassObservable.notifyObservers(subMesh);
+                    }
+                }
+
+                // Draw
+                this._processRendering(this, subMesh, effect, fillMode, batch, hardwareInstancedRendering, this._onBeforeDraw, this._internalMeshDataInfo._effectiveMaterial);
             }
+        } finally {
+            MaterialHelperGeometryRendering._RestoreAttachments(engine);
         }
-
-        // Draw
-        this._processRendering(this, subMesh, effect, fillMode, batch, hardwareInstancedRendering, this._onBeforeDraw, this._internalMeshDataInfo._effectiveMaterial);
 
         // Unbind
         this._internalMeshDataInfo._effectiveMaterial.unbind();
@@ -4214,6 +4224,9 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
         if (this.metadata) {
             serializationObject.metadata = this.metadata;
         }
+        if (this.meshBlendingTag !== 0) {
+            serializationObject.meshBlendingTag = this.meshBlendingTag;
+        }
 
         // Instances
         serializationObject.instances = [];
@@ -4531,6 +4544,9 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
 
         if (parsedMesh.metadata !== undefined) {
             mesh.metadata = parsedMesh.metadata;
+        }
+        if (parsedMesh.meshBlendingTag !== undefined) {
+            mesh.meshBlendingTag = parsedMesh.meshBlendingTag;
         }
 
         if (parsedMesh.rotationQuaternion) {

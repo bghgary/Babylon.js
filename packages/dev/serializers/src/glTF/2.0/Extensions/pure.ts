@@ -2,6 +2,7 @@
 export * from "./EXT_mesh_gpu_instancing.pure";
 export * from "./KHR_draco_mesh_compression.pure";
 export * from "./KHR_lights_punctual.pure";
+export * from "./KHR_interactivity.pure";
 export * from "./EXT_lights_area.pure";
 export * from "./KHR_materials_anisotropy.pure";
 export * from "./KHR_materials_clearcoat.pure";
@@ -17,7 +18,7 @@ export * from "./KHR_materials_specular.pure";
 export * from "./KHR_materials_transmission.pure";
 export * from "./KHR_materials_unlit.pure";
 export * from "./KHR_materials_volume.pure";
-export * from "./KHR_materials_volume_scatter.pure";
+export * from "./KHR_materials_scatter.pure";
 export * from "./KHR_materials_diffuse_roughness.pure";
 export * from "./KHR_materials_openpbr.pure";
 export * from "./KHR_texture_transform.pure";

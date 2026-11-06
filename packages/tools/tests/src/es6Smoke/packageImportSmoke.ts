@@ -3,11 +3,11 @@ import * as Addons from "@babylonjs/addons";
 import * as Core from "@babylonjs/core";
 import * as GUI from "@babylonjs/gui";
 import * as Ktx2Decoder from "@babylonjs/ktx2decoder";
+import * as Ktx2Encoder from "@babylonjs/ktx2encoder";
 import * as Loaders from "@babylonjs/loaders";
 import "@babylonjs/loaders/glTF";
 import "@babylonjs/loaders/OBJ";
 import "@babylonjs/loaders/STL";
-import * as LottiePlayer from "@babylonjs/lottie-player";
 import * as Materials from "@babylonjs/materials";
 import * as PostProcesses from "@babylonjs/post-processes";
 import * as ProceduralTextures from "@babylonjs/procedural-textures";
@@ -23,8 +23,8 @@ const packageNamespaces = {
     Core,
     GUI,
     Ktx2Decoder,
+    Ktx2Encoder,
     Loaders,
-    LottiePlayer,
     Materials,
     PostProcesses,
     ProceduralTextures,

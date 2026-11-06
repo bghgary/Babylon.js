@@ -27,6 +27,7 @@ const Tooltips: Record<string, string> = {
     FlowGraphSceneReadyEventBlock: "Triggered when the scene is ready",
     FlowGraphSceneTickEventBlock: "Triggered every frame",
     FlowGraphMeshPickEventBlock: "Triggered when a mesh is picked",
+    FlowGraphMeshIntersectionEventBlock: "Triggered when a source mesh enters or exits intersection with one or more target meshes",
     FlowGraphPointerEventBlock: "Triggered on pointer events",
     FlowGraphPointerDownEventBlock: "Triggered on pointer down",
     FlowGraphPointerUpEventBlock: "Triggered on pointer up",
@@ -38,6 +39,10 @@ const Tooltips: Record<string, string> = {
     FlowGraphKeyDownEventBlock: "Triggered when a keyboard key is pressed down",
     FlowGraphKeyUpEventBlock: "Triggered when a keyboard key is released",
     FlowGraphIsKeyPressedBlock: "Checks if a keyboard key is currently held down",
+    FlowGraphEventReferenceBlock: "glTF import helper that captures KHR_interactivity event outputs; normally created automatically",
+    FlowGraphGLTFDataProvider: "glTF import helper that exposes loaded glTF nodes and animations; normally created automatically",
+    FlowGraphObjectReferenceBlock: "glTF import helper that converts runtime objects to KHR references; normally created automatically",
+    FlowGraphUnsupportedInteractivityBlock: "Imported placeholder preserving an unsupported glTF interactivity extension operation",
 
     // Control Flow
     FlowGraphBranchBlock: "Branches execution based on a condition",

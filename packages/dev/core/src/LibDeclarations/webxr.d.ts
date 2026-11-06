@@ -247,6 +247,8 @@ interface XRInputSource {
     readonly gamepad?: Gamepad | undefined;
     readonly profiles: string[];
     readonly hand?: XRHand;
+    /** Indicates that the user agent recommends omitting the application's input source representation. */
+    readonly skipRendering?: boolean;
 }
 
 declare abstract class XRInputSource implements XRInputSource {}
@@ -438,6 +440,7 @@ interface XRSession extends EventTarget {
     readonly visibilityState: XRVisibilityState;
     readonly frameRate?: number | undefined;
     readonly supportedFrameRates?: Float32Array | undefined;
+    readonly maxRenderLayers?: number | undefined;
 
     /**
      * Removes a callback from the animation frame painting callback from
@@ -533,8 +536,8 @@ interface XRView {
     readonly eye: XREye;
     readonly projectionMatrix: Float32Array;
     readonly transform: XRRigidTransform;
-    readonly recommendedViewportScale?: number | undefined;
-    requestViewportScale(scale: number): void;
+    readonly recommendedViewportScale?: number | null | undefined;
+    requestViewportScale(scale: number | null): void;
 }
 
 declare abstract class XRView implements XRView {}
@@ -814,8 +817,11 @@ interface XRCompositionLayer extends XRLayer {
     readonly layout: XRLayerLayout;
     blendTextureSourceAlpha: boolean;
     chromaticAberrationCorrection?: boolean | undefined;
+    forceMonoPresentation?: boolean | undefined;
+    opacity?: number | undefined;
     readonly mipLevels: number;
     readonly needsRedraw: boolean;
+    quality?: XRLayerQuality | undefined;
     destroy(): void;
 
     space: XRSpace;
@@ -841,6 +847,8 @@ type XRTextureType = "texture" | "texture-array";
 
 type XRLayerLayout = "default" | "mono" | "stereo" | "stereo-left-right" | "stereo-top-bottom";
 
+type XRLayerQuality = "default" | "text-optimized" | "graphics-optimized";
+
 interface XRProjectionLayerInit {
     scaleFactor?: number | undefined;
     textureType?: XRTextureType | undefined;
@@ -854,7 +862,7 @@ interface XRProjectionLayer extends XRCompositionLayer {
     readonly textureHeight: number;
     readonly textureArrayLength: number;
     readonly ignoreDepthValues: number;
-    fixedFoveation: number;
+    fixedFoveation?: number | null | undefined;
 }
 
 declare abstract class XRProjectionLayer implements XRProjectionLayer {}

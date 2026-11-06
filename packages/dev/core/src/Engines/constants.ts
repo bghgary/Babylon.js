@@ -181,6 +181,12 @@ export class Constants {
 
     /** Flag to create a storage texture */
     public static readonly TEXTURE_CREATIONFLAG_STORAGE = 1;
+    /**
+     * Flag to create a non-mipmapped raw texture that is only filled from typed arrays (without invertY / premultiplyAlpha) and sampled.
+     * On WebGPU, the texture is created without the render attachment usage, which can make random texel fetches much faster on some GPUs.
+     * Such a texture can't be updated from images, rendered to, or updated with invertY / premultiplyAlpha. Ignored by other engines.
+     */
+    public static readonly TEXTURE_CREATIONFLAG_SAMPLED_DATA_ONLY = 2;
 
     /** ALPHA */
     public static readonly TEXTUREFORMAT_ALPHA = 0;
@@ -827,6 +833,17 @@ export class Constants {
      * using getIndex(Constants.PREPASS_IRRADIANCE_TEXTURE_TYPE)
      */
     public static readonly PREPASS_IRRADIANCE_TEXTURE_TYPE = 14;
+
+    /**
+     * Constant used to retrieve the object ID texture index in geometry rendering textures.
+     * Object IDs are stored as 24-bit RGB values or 8-bit RED values, depending on the texture format.
+     */
+    public static readonly PREPASS_OBJECT_ID_TEXTURE_TYPE = 15;
+
+    /**
+     * Constant used to retrieve the packed mesh-blending tag texture index in geometry rendering textures.
+     */
+    public static readonly PREPASS_MESH_BLEND_TAG_TEXTURE_TYPE = 16;
 
     /** Flag to create a readable buffer (the buffer can be the source of a copy) */
     public static readonly BUFFER_CREATIONFLAG_READ = 1;

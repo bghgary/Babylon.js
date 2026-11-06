@@ -27,6 +27,8 @@ You can drag and drop a `.glb`, `.gltf`, or `.babylon` file onto the **Scene Pre
 
 The loaded scene replaces the current scene (default or snippet) and populates the scene context with all objects found in the file.
 
+The preview preserves the scene's active camera, or selects its first imported camera if none is active. A default orbit camera is created only when the scene has no camera. If loading fails, the previous preview remains available.
+
 ### Loading a Playground Snippet
 
 The editor can load a Babylon.js Playground snippet as a live scene to test your flow graph against.
@@ -43,6 +45,19 @@ The loaded scene's objects (meshes, lights, cameras, etc.) become available as r
 - **Save to snippet server** — Uploads the graph to the Babylon.js snippet server and copies the snippet ID to your clipboard. The scene snippet ID is saved alongside the graph so the scene auto-loads on restore.
 - **Load from file** — Import a previously saved JSON file.
 - **Load from snippet** — Enter a snippet ID to restore a graph (and its associated scene, if any).
+
+Coordinator sound assets are included in file and snippet saves. Imported audio is embedded as a `data:` URL, so the saved graph remains self-contained.
+
+### Sound Assets
+
+Use the **Sound Assets** section in the property panel when no block is selected:
+
+- **Import audio** accepts common browser audio formats such as MP3, OGG, M4A, and WAV.
+- **Preview** and **Stop** audition a loaded sound without running the graph.
+- **Replace** reloads audio under the same asset name, so every name-based block reference keeps working.
+- **Remove** disposes the sound asset. Existing block input strings are left intact so the asset can be restored later under the same name.
+
+Audio block `sound` inputs store the selected asset name as a plain string.
 
 ### How to Use (Embed Code)
 
@@ -80,12 +95,20 @@ Click the **✕** button on a variable row to delete it. This removes all `GetVa
 
 ### glTF Import / Export
 
+**Creating a KHR_interactivity behavior:**
+
+- Start with one empty graph and the default scene, a Playground scene, or an imported graphless `.glb`. Choose **New behavior** in Scene Preview and select **Select to reveal** or **Two-step procedure**.
+- **Select to reveal** uses a visible, pickable trigger mesh and a different enabled mesh to reveal. **Two-step procedure** uses five distinct roles: first part, second part, next-step cue, completion cue, and Reset control. Selecting the parts in order advances the cues; selecting Reset starts over.
+- **Create behavior** exports and reloads the preview as a GLB. For an imported `.glb`, it patches the source document without reserializing its scene or binary chunks and downloads the authored GLB. Keep any external buffer or image files at their referenced paths; the GLB download does not include them. For a default or Playground scene, Babylon-only features may be omitted during glTF export. Imported `.gltf` and `.babylon` files do not support **New behavior**.
+- **Reset** replays the behavior without losing current graph edits. It restores source `KHR_node_visibility`, `KHR_node_selectability`, and `KHR_node_hoverability` values, including implicit defaults actually changed by pointer operations.
+
 **Importing a glTF with an interactive flow graph:**
 
 - Drag-and-drop a `.glb` or `.gltf` file onto the scene preview pane.
 - If the file contains a **KHR_interactivity** extension, the flow graph is automatically loaded into the editor.
 - If the file contains a **BABYLON_flow_graph** custom extension (created by this editor's export), the flow graph is restored as well.
 - The scene from the file is loaded as the preview scene so block references to meshes, cameras, and lights can be resolved.
+- You can edit a representable imported KHR graph, then use **Export KHR GLB**. For an imported `.glb`, this patches the retained source GLB; unrelated scene data and chunks remain intact. Unsupported edits receive export diagnostics. **Export KHR glTF** and Babylon-specific scene export are unavailable for source-preserving GLB editing.
 
 **Loading a glTF graph without a scene:**
 
@@ -107,8 +130,11 @@ The palette contains a **Templates** section with pre-built multi-block patterns
 - **Animation Patterns** — Lerp Animation (tick-driven interpolation)
 - **Communication** — Custom Event Bridge (send + receive pair)
 - **glTF Interactivity** — Get → Set Property, Get → Set Variable
+- **Reactions** — Pick → Play Sound, Intersection → Play Sound, Add Reaction to Existing Event
 
-Drag a template from the palette onto the canvas. All blocks are created and internally wired automatically. You can then edit individual blocks (change targets, configure conditions, etc.).
+The intersection template reacts to bounding-volume overlap through `FlowGraphMeshIntersectionEventBlock`. It is not a physics-impact event: an overlap may exist on startup, fast crossings can be missed between frames, and adding the same pair in both directions creates two independent sensors. Contact-position audio remains a separate authoring task.
+
+Drag a template from the palette onto the canvas. All blocks are created and internally wired automatically. These templates emit ordinary blocks rather than editor-only behavior: select the pick/intersection meshes, sound asset name, or custom event id in the normal property panel and continue editing or rewiring the graph.
 
 ---
 
@@ -122,12 +148,12 @@ The **Undo** (↩) and **Redo** (↪) buttons are at the left side of the toolba
 
 ### Execution Controls
 
-| Button | Label     | Description                                                                                                                                                     |
-| ------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ▶      | **Start** | Starts executing the flow graph. Enabled when the graph is stopped or paused.                                                                                   |
-| ⏸      | **Pause** | Pauses execution. The graph can be resumed with Start.                                                                                                          |
-| ⏹      | **Stop**  | Stops execution and resets execution state.                                                                                                                     |
-| ↺      | **Reset** | Stops execution and reloads the scene from its snippet (if one was loaded). If the reload fails, an error is logged and the graph returns to the Stopped state. |
+| Button | Label     | Description                                                                                                                                                                                                                                                  |
+| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ▶      | **Start** | Starts executing the flow graph. Enabled when the graph is stopped or paused.                                                                                                                                                                                |
+| ⏸      | **Pause** | Pauses execution. The graph can be resumed with Start.                                                                                                                                                                                                       |
+| ⏹      | **Stop**  | Stops execution and resets execution state.                                                                                                                                                                                                                  |
+| ↺      | **Reset** | Stops execution and recreates the default scene, reloads a snippet, or restores imported `KHR_node_visibility`, `KHR_node_selectability`, and `KHR_node_hoverability` values changed by the graph. Other imported scene changes require reopening the asset. |
 
 The **state indicator** next to the controls shows the current graph state: `Stopped`, `Running`, `Paused`, or `Breakpoint`.
 
@@ -179,6 +205,7 @@ When enabled, you'll see:
 - **Block execution highlighting** — Blocks flash with a green glow when they execute.
 - **Port activity** — Input ports that received data and output ports that fired glow green.
 - **Flow animation** — Traveling dots animate along connections when signals fire or data flows, showing the direction and timing of execution.
+- **Event log** — The Log panel records each event that fired and each block that ran. Click an entry to navigate to the block.
 
 > Debug mode adds some overhead. It throttles visual updates to 100ms per node to keep the editor responsive.
 
@@ -280,6 +307,8 @@ Click the **Validate** button (✓) in the toolbar. The button shows a count of 
 Click the **Live Validation** toggle (⚡) to enable automatic validation whenever the graph changes. Validation runs on a debounced schedule so it doesn't slow down editing.
 
 Validation issues include the block name, severity (error/warning), and a descriptive message.
+
+Imported `FlowGraphUnsupportedInteractivityBlock` nodes are reported as errors. Diagnostics from a failed KHR_interactivity export also remain in validation until the next successful export.
 
 ### Connection Type Compatibility
 
@@ -463,7 +492,7 @@ The editor includes a set of blocks for interacting with the Babylon.js Physics 
 
 ## Audio Blocks
 
-The editor includes blocks for controlling audio playback using the Babylon.js Audio V2 system. These blocks operate on `AbstractSound` references (either `StaticSound` or `StreamingSound` instances created via `CreateSoundAsync` / `CreateStreamingSoundAsync`).
+The editor includes blocks for controlling audio playback using the Babylon.js Audio V2 system. A `sound` input can use an `AbstractSound` reference or the name of a sound asset declared in the editor's **Sound Assets** panel. The property panel provides a picker for the declared names.
 
 ### Audio Actions (Execution Blocks)
 
@@ -487,7 +516,7 @@ The editor includes blocks for controlling audio playback using the Babylon.js A
 | **GetSoundVolume** | Reads the current volume of a sound.                        |
 | **IsSoundPlaying** | Returns true if the sound is currently playing or starting. |
 
-> **Note:** Audio blocks require sounds created via the Audio V2 API (`CreateSoundAsync`, `CreateStreamingSoundAsync`). The legacy `Sound` class (V1) is not supported by these blocks.
+> **Note:** Imported sound assets are loaded through Audio V2. The legacy `Sound` class (V1) is not supported by these blocks.
 
 ---
 
@@ -496,7 +525,7 @@ The editor includes blocks for controlling audio playback using the Babylon.js A
 - **Use debug blocks liberally** — they're zero-cost when the graph isn't running and give you visibility into data flow.
 - **Step through unfamiliar graphs** — set a breakpoint on the first block and use Step to trace the execution path.
 - **Watch the flow animation** — in debug mode, the animated dots show you the actual order of execution, which can reveal unexpected paths.
-- **Reset vs. Stop** — use Reset when you've modified the scene's state and need a clean slate; use Stop when you just want to halt execution.
+- **Reset vs. Stop** — use Reset to replay the default scene or a loaded snippet, or to restore imported KHR visibility, selectability, and hoverability values changed by the graph; use Stop to halt execution. Reopen an imported asset to restore other scene changes.
 - **Minimap** — when you zoom or pan, a minimap appears in the bottom-right corner showing all nodes, frames, and your current viewport. Click or drag on the minimap to navigate directly to that area. It auto-hides after 1.5 seconds of inactivity.
 
 ---

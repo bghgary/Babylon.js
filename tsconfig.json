@@ -33,6 +33,7 @@
             "accessibility/*": ["./packages/tools/accessibility/src/*"],
             "viewer/*": ["./packages/tools/viewer/src/*"],
             "ktx2decoder/*": ["./packages/tools/ktx2Decoder/src/*"],
+            "ktx2encoder/*": ["./packages/tools/ktx2Encoder/src/*"],
             "shared-ui-components/*": ["./packages/dev/sharedUiComponents/src/*"],
             "@tools/gui-editor/*": ["./packages/tools/guiEditor/src/*"],
             "@tools/node-editor/*": ["./packages/tools/nodeEditor/src/*"],
@@ -42,6 +43,8 @@
             "@tools/accessibility/*": ["./packages/tools/accessibility/src/*"],
             "@tools/mcp-server-core": ["./packages/tools/mcp-server-core/src/index"],
             "@tools/mcp-server-core/*": ["./packages/tools/mcp-server-core/src/*"],
+            "@tools/nge-mcp-common": ["./packages/tools/ngeMcpCommon/src/index"],
+            "@tools/nge-mcp-common/*": ["./packages/tools/ngeMcpCommon/src/*"],
             "@dev/core": ["./packages/dev/core/src"],
             "@dev/gui": ["./packages/dev/gui/src"],
             "@dev/materials": ["./packages/dev/materials/src"],
@@ -78,9 +81,7 @@
             "smart-filters/*": ["./packages/dev/smartFilters/src/*"],
             "smart-filters-blocks": ["./packages/dev/smartFilterBlocks/src"],
             "smart-filters-blocks/*": ["./packages/dev/smartFilterBlocks/src/*"],
-            "smart-filters-editor-control": ["./packages/tools/smartFiltersEditorControl/src"],
-            "lottie-player": ["./packages/dev/lottiePlayer/src"],
-            "lottie-player/*": ["./packages/dev/lottiePlayer/src/*"]
+            "smart-filters-editor-control": ["./packages/tools/smartFiltersEditorControl/src"]
         }
     }
 }

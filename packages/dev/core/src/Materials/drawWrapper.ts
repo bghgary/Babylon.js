@@ -78,12 +78,35 @@ export class DrawWrapper {
      * @param resetContext If true, resets the draw context (default is true).
      */
     public setEffect(effect: Nullable<Effect>, defines?: Nullable<string | MaterialDefines>, resetContext = true): void {
+        if (!resetContext && this.effect !== effect) {
+            this.drawContext?._releaseUniformBufferSlots?.();
+        }
         this.effect = effect;
         if (defines !== undefined) {
             this.defines = defines;
         }
         if (resetContext) {
             this.drawContext?.reset();
+        }
+    }
+
+    /**
+     * @internal
+     * Replaces the draw context with a new one created by the engine, keeping its instancing setting.
+     * After a context restoration, the old draw context can still hold resources of the lost device (in WebGPU,
+     * the indirect draw buffer used for instanced draws, and the buffer manager that created it).
+     * @param engine The engine to create the new draw context with.
+     */
+    public _recreateDrawContext(engine: AbstractEngine): void {
+        const oldContext = this.drawContext;
+        if (!oldContext) {
+            return;
+        }
+        const useInstancing = oldContext.useInstancing;
+        oldContext.dispose();
+        this.drawContext = engine.createDrawContext();
+        if (this.drawContext && useInstancing) {
+            this.drawContext.useInstancing = true;
         }
     }
 

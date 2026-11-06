@@ -7,15 +7,21 @@ import {
     FlowGraphConstantBlock,
     FlowGraphCoordinator,
     FlowGraphGetVariableBlock,
+    FlowGraphInteger,
     FlowGraphConsoleLogBlock,
     FlowGraphDivideBlock,
     FlowGraphMultiGateBlock,
     FlowGraphMultiplyBlock,
     FlowGraphPlayAnimationBlock,
     FlowGraphSceneReadyEventBlock,
+    FlowGraphMeshIntersectionEventBlock,
+    FlowGraphSendCustomEventBlock,
+    FlowGraphReceiveCustomEventBlock,
     FlowGraphSetPropertyBlock,
     FlowGraphSubtractBlock,
+    FlowGraphStopAnimationBlock,
     RichTypeNumber,
+    RichTypeFlowGraphInteger,
     RichTypeVector3,
     ParseGraphDataConnection,
     ParseFlowGraphBlockWithClassType,
@@ -30,14 +36,14 @@ import { FlowGraphConnectionType } from "core/FlowGraph/flowGraphConnection";
 import { FlowGraphDataConnection } from "core/FlowGraph/flowGraphDataConnection";
 import { FlowGraphEventType } from "core/FlowGraph/flowGraphEventType";
 import { FlowGraphPathConverter } from "core/FlowGraph/flowGraphPathConverter";
-import { defaultValueSerializationFunction } from "core/FlowGraph/serialization";
+import { defaultValueParseFunction, defaultValueSerializationFunction } from "core/FlowGraph/serialization";
 import { InstancedMesh } from "core/Meshes/instancedMesh";
 import { Vector3 } from "core/Maths";
 import { Mesh } from "core/Meshes";
 import { TransformNode } from "core/Meshes/transformNode";
 import { Logger } from "core/Misc/logger";
 import { Scene } from "core/scene";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArcRotateCamera } from "core/Cameras/arcRotateCamera";
 
 function MockFlowGraphSnippet(serializedFlowGraph: any) {
@@ -71,6 +77,7 @@ describe("Flow Graph Serialization", () => {
         const block = {} as any;
         block.uniqueId = "test";
         const connection = new FlowGraphDataConnection("test", FlowGraphConnectionType.Input, block, RichTypeNumber);
+        connection.metadata = { source: { socket: "value" } };
         const serialized: any = {};
         connection.serialize(serialized);
 
@@ -81,6 +88,7 @@ describe("Flow Graph Serialization", () => {
         expect(serialized.className).toEqual("FlowGraphDataConnection");
         expect(serialized.richType.typeName).toEqual("number");
         expect(serialized.richType.defaultValue).toEqual(0);
+        expect(serialized.metadata).toEqual(connection.metadata);
 
         const parsed = ParseGraphDataConnection(serialized, block, FlowGraphDataConnection);
         expect(parsed.uniqueId).toEqual(connection.uniqueId);
@@ -89,6 +97,7 @@ describe("Flow Graph Serialization", () => {
         expect(parsed.getClassName()).toEqual("FlowGraphDataConnection");
         expect(parsed.richType.typeName).toEqual("number");
         expect(parsed.richType.defaultValue).toEqual(0);
+        expect(parsed.metadata).toEqual(connection.metadata);
 
         const connection2 = new FlowGraphDataConnection("test2", FlowGraphConnectionType.Output, block, RichTypeNumber);
         connection.connectTo(connection2);
@@ -117,12 +126,276 @@ describe("Flow Graph Serialization", () => {
         expect(parsed3.richType.defaultValue.z).toEqual(0);
     });
 
+    it("preserves prototype-like custom event payload ids as own properties", () => {
+        const emptyReceive = new FlowGraphReceiveCustomEventBlock({ eventId: "event", eventData: {} });
+        const legacySerializedReceive: any = {};
+        emptyReceive.serialize(legacySerializedReceive);
+        legacySerializedReceive.config.eventData = [
+            {
+                eventData: true,
+                id: "__proto__",
+                type: "number",
+                value: { type: "number", value: [5] },
+            },
+        ];
+        const parsedLegacyReceive = ParseFlowGraphBlockWithClassType(legacySerializedReceive, { scene }, FlowGraphReceiveCustomEventBlock) as FlowGraphReceiveCustomEventBlock;
+        const eventData = parsedLegacyReceive.config.eventData;
+        expect(Object.prototype.hasOwnProperty.call(eventData, "__proto__")).toBe(true);
+        Object.defineProperty(eventData, "position", {
+            configurable: true,
+            enumerable: true,
+            value: { type: RichTypeVector3, value: new Vector3(1, 2, 3) },
+            writable: true,
+        });
+
+        const send = new FlowGraphSendCustomEventBlock({ eventId: "event", eventData });
+        const receive = new FlowGraphReceiveCustomEventBlock({ eventId: "event", eventData });
+        expect(send.getDataInput("__proto__")).toBeDefined();
+        expect(receive.getDataOutput("__proto__")).toBeDefined();
+
+        const serialized: any = {};
+        send.serialize(serialized);
+        expect(Object.prototype.hasOwnProperty.call(serialized.config.eventData, "__proto__")).toBe(true);
+
+        const serializedReceive: any = {};
+        receive.serialize(serializedReceive);
+        expect(Object.prototype.hasOwnProperty.call(serializedReceive.config.eventData, "__proto__")).toBe(true);
+        expect(serializedReceive.config.eventData["__proto__"].value).toBe(5);
+        const parsedReceive = ParseFlowGraphBlockWithClassType(serializedReceive, { scene }, FlowGraphReceiveCustomEventBlock) as FlowGraphReceiveCustomEventBlock;
+        expect(parsedReceive.config.eventData.position.value).toEqual(new Vector3(1, 2, 3));
+    });
+
+    it("passes the complete custom event schema to an explicit value parser", () => {
+        const receive = new FlowGraphReceiveCustomEventBlock({
+            eventId: "event",
+            eventData: { score: { type: RichTypeNumber, value: 5 } },
+        });
+        const serialized: any = {};
+        receive.serialize(serialized);
+        const valueParseFunction = vi.fn((key: string, serializationObject: any, assetsContainer: any, parseScene: Scene) => {
+            if (key === "eventData") {
+                return { score: { type: RichTypeNumber, value: 42 } };
+            }
+            return defaultValueParseFunction(key, serializationObject, assetsContainer, parseScene);
+        });
+
+        const parsed = ParseFlowGraphBlockWithClassType(serialized, { scene, valueParseFunction }, FlowGraphReceiveCustomEventBlock) as FlowGraphReceiveCustomEventBlock;
+
+        expect(valueParseFunction).toHaveBeenCalledWith("eventData", serialized.config, scene, scene);
+        expect(parsed.config.eventData.score.value).toBe(42);
+    });
+
+    it("applies scoped event decoding across Send and Receive when an explicit value parser delegates to the default", () => {
+        const eventData = { value: { type: RichTypeNumber, value: 5 } };
+        const send = new FlowGraphSendCustomEventBlock({ eventId: "event", eventData });
+        const receive = new FlowGraphReceiveCustomEventBlock({
+            eventId: "event",
+            eventData,
+        });
+        const valueParseFunction = vi.fn(defaultValueParseFunction);
+        const serializedSend: any = {};
+        send.serialize(serializedSend);
+        const serializedReceive: any = {};
+        receive.serialize(serializedReceive);
+
+        const parsedSend = ParseFlowGraphBlockWithClassType(serializedSend, { scene, valueParseFunction }, FlowGraphSendCustomEventBlock) as FlowGraphSendCustomEventBlock;
+        const parsedReceive = ParseFlowGraphBlockWithClassType(
+            serializedReceive,
+            { scene, valueParseFunction },
+            FlowGraphReceiveCustomEventBlock
+        ) as FlowGraphReceiveCustomEventBlock;
+
+        expect(valueParseFunction).toHaveBeenCalledWith("eventData", serializedSend.config, scene, scene);
+        expect(valueParseFunction).toHaveBeenCalledWith("eventData", serializedReceive.config, scene, scene);
+        expect(parsedSend.getDataInput("value")).toBeDefined();
+        expect(parsedReceive.getDataOutput("value")).toBeDefined();
+        expect(parsedSend.config.eventData.value.value).toBe(5);
+        expect(parsedReceive.config.eventData.value.value).toBe(5);
+    });
+
+    it("applies delegated scoped event decoding to importer-shaped arrays across Send and Receive", () => {
+        const send = new FlowGraphSendCustomEventBlock({ eventId: "event", eventData: {} });
+        const receive = new FlowGraphReceiveCustomEventBlock({ eventId: "event", eventData: {} });
+        const serializedSend: any = {};
+        const serializedReceive: any = {};
+        send.serialize(serializedSend);
+        receive.serialize(serializedReceive);
+        const eventData = [
+            {
+                eventData: true,
+                id: "score",
+                type: "number",
+                value: { type: "number", value: [5] },
+            },
+        ];
+        serializedSend.config.eventData = eventData;
+        serializedReceive.config.eventData = eventData;
+        const valueParseFunction = vi.fn((key: string, serializationObject: any, assetsContainer: any, parseScene: Scene) =>
+            defaultValueParseFunction(key, serializationObject, assetsContainer, parseScene)
+        );
+
+        const parsedSend = ParseFlowGraphBlockWithClassType(serializedSend, { scene, valueParseFunction }, FlowGraphSendCustomEventBlock) as FlowGraphSendCustomEventBlock;
+        const parsedReceive = ParseFlowGraphBlockWithClassType(
+            serializedReceive,
+            { scene, valueParseFunction },
+            FlowGraphReceiveCustomEventBlock
+        ) as FlowGraphReceiveCustomEventBlock;
+
+        expect(parsedSend.getDataInput("score")).toBeDefined();
+        expect(parsedReceive.getDataOutput("score")).toBeDefined();
+        expect(parsedSend.getDataInput("0")).toBeUndefined();
+        expect(parsedReceive.getDataOutput("0")).toBeUndefined();
+        expect(parsedSend.config.eventData.score.value).toBe(5);
+        expect(parsedReceive.config.eventData.score.value).toBe(5);
+    });
+
+    it("preserves a typed default reconstructed by an in-place custom event parser", () => {
+        const receive = new FlowGraphReceiveCustomEventBlock({
+            eventId: "event",
+            eventData: { value: { type: RichTypeFlowGraphInteger, value: new FlowGraphInteger(5) } },
+        });
+        const serialized: any = {};
+        receive.serialize(serialized);
+        const valueParseFunction = vi.fn((key: string, serializationObject: any, assetsContainer: any, parseScene: Scene) => {
+            if (key === "eventData") {
+                serializationObject.eventData.value.type = RichTypeFlowGraphInteger;
+                serializationObject.eventData.value.value = new FlowGraphInteger(5);
+                return serializationObject.eventData;
+            }
+            return defaultValueParseFunction(key, serializationObject, assetsContainer, parseScene);
+        });
+
+        const parsed = ParseFlowGraphBlockWithClassType(serialized, { scene, valueParseFunction }, FlowGraphReceiveCustomEventBlock) as FlowGraphReceiveCustomEventBlock;
+
+        expect(parsed.config.eventData.value.value).toBeInstanceOf(FlowGraphInteger);
+        expect(parsed.config.eventData.value.value.value).toBe(5);
+    });
+
+    it("round-trips Send and Receive custom-event sockets named value through a full graph parse", () => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const eventData = { value: { type: RichTypeNumber, value: 5 } };
+        const send = new FlowGraphSendCustomEventBlock({ eventId: "event", eventData });
+        const receive = new FlowGraphReceiveCustomEventBlock({ eventId: "event", eventData });
+        graph.addBlock(send);
+        graph.addBlock(receive);
+        graph.addEventBlock(receive);
+        const serialized: any = {};
+        graph.serialize(serialized);
+
+        const parsed = ParseFlowGraph(
+            serialized,
+            { coordinator },
+            serialized.allBlocks.map((block: any) => (block.className === send.getClassName() ? FlowGraphSendCustomEventBlock : FlowGraphReceiveCustomEventBlock))
+        );
+        const parsedSend = parsed.getAllBlocks().find((block) => block.getClassName() === send.getClassName()) as FlowGraphSendCustomEventBlock;
+        const parsedReceive = parsed.getAllBlocks().find((block) => block.getClassName() === receive.getClassName()) as FlowGraphReceiveCustomEventBlock;
+
+        expect(parsedSend.getDataInput("value")).toBeDefined();
+        expect(parsedReceive.getDataOutput("value")).toBeDefined();
+        expect(parsedSend.config.eventData.value.value).toBe(5);
+        expect(parsedReceive.config.eventData.value.value).toBe(5);
+    });
+
+    it("preserves importer-shaped custom-event schemas when provenance is enabled", () => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const send = new FlowGraphSendCustomEventBlock({ eventId: "event", eventData: {} });
+        const receive = new FlowGraphReceiveCustomEventBlock({ eventId: "event", eventData: {} });
+        graph.addBlock(send);
+        graph.addEventBlock(receive);
+        const serialized: any = {};
+        graph.serialize(serialized);
+        const eventData = [
+            {
+                eventData: true,
+                id: "score",
+                type: "number",
+                value: { type: "number", value: [5] },
+            },
+        ];
+        for (const serializedBlock of serialized.allBlocks) {
+            serializedBlock.config.eventData = eventData;
+        }
+        serialized.referenceProvenance = [];
+
+        const parsed = ParseFlowGraph(
+            serialized,
+            { coordinator },
+            serialized.allBlocks.map((block: any) => (block.className === send.getClassName() ? FlowGraphSendCustomEventBlock : FlowGraphReceiveCustomEventBlock))
+        );
+        const parsedSend = parsed.getAllBlocks().find((block) => block.getClassName() === send.getClassName()) as FlowGraphSendCustomEventBlock;
+        const parsedReceive = parsed.getAllBlocks().find((block) => block.getClassName() === receive.getClassName()) as FlowGraphReceiveCustomEventBlock;
+
+        expect(parsedSend.getDataInput("score")).toBeDefined();
+        expect(parsedReceive.getDataOutput("score")).toBeDefined();
+        expect(parsedSend.getDataInput("0")).toBeUndefined();
+        expect(parsedReceive.getDataOutput("0")).toBeUndefined();
+    });
+
+    it("preserves non-array custom parser results when provenance is enabled", () => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const block = new FlowGraphMeshIntersectionEventBlock();
+        graph.addEventBlock(block);
+        (block.targetMeshes as any)._defaultValue = [{ id: "part" }];
+        const serialized: any = {};
+        graph.serialize(serialized);
+        serialized.referenceProvenance = [];
+        const parsedTargets = new Float32Array([1, 2]);
+        const valueParseFunction = (key: string, serializationObject: any, assetsContainer: any, parseScene: Scene) => {
+            if (key === "defaultValue" && serializationObject.name === "targetMeshes") {
+                return parsedTargets;
+            }
+            return defaultValueParseFunction(key, serializationObject, assetsContainer, parseScene);
+        };
+
+        const parsed = ParseFlowGraph(serialized, { coordinator, valueParseFunction }, [FlowGraphMeshIntersectionEventBlock]);
+        const parsedBlock = parsed.getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+
+        expect((parsedBlock.targetMeshes as any)._defaultValue).toBe(parsedTargets);
+    });
+
+    it("keeps mixed nested arrays serialized instead of resolving nested references", () => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const node = new Mesh("part", scene);
+        const serializedReference = { uniqueId: node.uniqueId, id: node.id, name: node.name, className: node.getClassName() };
+        const block = new FlowGraphConstantBlock({ value: [[serializedReference], "label"] });
+        graph.addBlock(block);
+        const serialized: any = {};
+        graph.serialize(serialized);
+        serialized.referenceProvenance = [
+            [
+                node.uniqueId,
+                {
+                    id: node.id,
+                    name: node.name,
+                    className: node.getClassName(),
+                    idIndex: 0,
+                    nameIndex: 0,
+                    sceneUid: scene.uid,
+                },
+            ],
+        ];
+
+        const parsed = ParseFlowGraph(serialized, { coordinator }, [FlowGraphConstantBlock]);
+        const parsedBlock = parsed.getAllBlocks()[0] as FlowGraphConstantBlock<any>;
+        const roundTripped: any = {};
+        parsed.serialize(roundTripped);
+
+        expect(parsedBlock.config.value).toEqual([[serializedReference], "label"]);
+        expect(parsedBlock.config.value[0][0]).not.toBe(node);
+        expect(roundTripped.allBlocks[0].config.value).toEqual([[serializedReference], "label"]);
+    });
+
     it("Serializes and parses a block", () => {
         // Serialize a block with path
         // const mockContext: any = vi.mock("core/FlowGraph/flowGraphContext") as any;
         // const pathConverter = new FlowGraphPathConverter(mockContext);
 
         const block = new FlowGraphPlayAnimationBlock();
+        block.metadata = { source: { node: 3 } };
 
         const serialized: any = {};
         block.serialize(serialized);
@@ -132,6 +405,7 @@ describe("Flow Graph Serialization", () => {
         expect(serialized.dataInputs.length).toEqual(block.dataInputs.length);
         expect(serialized.dataOutputs.length).toEqual(block.dataOutputs.length);
         expect(serialized.className).toEqual("FlowGraphPlayAnimationBlock");
+        expect(serialized.metadata).toEqual(block.metadata);
 
         const parsed = ParseFlowGraphBlockWithClassType(serialized, { scene }, FlowGraphPlayAnimationBlock);
         expect(parsed.uniqueId).toEqual(block.uniqueId);
@@ -140,6 +414,7 @@ describe("Flow Graph Serialization", () => {
         expect(parsed.dataOutputs.length).toEqual(block.dataOutputs.length);
         expect((parsed as FlowGraphExecutionBlock).signalInputs.length).toEqual(block.signalInputs.length);
         expect((parsed as FlowGraphExecutionBlock).signalOutputs.length).toEqual(block.signalOutputs.length);
+        expect(parsed.metadata).toEqual(block.metadata);
 
         // Serialize a block with configuration
         const multiGateBlock = new FlowGraphMultiGateBlock({ outputSignalCount: 3, name: "MultiGate" });
@@ -147,6 +422,22 @@ describe("Flow Graph Serialization", () => {
         multiGateBlock.serialize(serialized2);
         const parsed2 = ParseFlowGraphBlockWithClassType(serialized2, { scene }, FlowGraphMultiGateBlock) as any;
         expect(parsed2.outputSignals.length).toEqual(3);
+    });
+
+    it.each([
+        [undefined, false, false],
+        [{ useVirtualStopAt: true, skipOnAnimationEnd: true }, true, true],
+    ])("preserves stop-animation mode through serialization", (config, expectedVirtualMode, expectedSkipEnd) => {
+        const block = new FlowGraphStopAnimationBlock(config);
+        const serialized: any = {};
+        block.serialize(serialized);
+
+        const parsed = ParseFlowGraphBlockWithClassType(serialized, { scene }, FlowGraphStopAnimationBlock) as FlowGraphStopAnimationBlock;
+
+        expect(serialized.config.useVirtualStopAt).toBe(expectedVirtualMode ? true : undefined);
+        expect(parsed.config?.useVirtualStopAt).toBe(expectedVirtualMode ? true : undefined);
+        expect(serialized.config.skipOnAnimationEnd).toBe(expectedSkipEnd ? true : undefined);
+        expect(parsed.config?.skipOnAnimationEnd).toBe(expectedSkipEnd ? true : undefined);
     });
 
     it("Serializes and parses a context", () => {
@@ -192,12 +483,30 @@ describe("Flow Graph Serialization", () => {
         expect(parsed.getVariable("test4").uniqueId).toEqual(mesh.uniqueId);
     });
 
+    it.each([
+        ["ordinary object", { score: 42 }],
+        ["ordinary object with a value property", { value: 5 }],
+        ["typed value", new Vector3(1, 2, 3)],
+    ])("preserves an %s stored in a context variable named eventData", (_description, value) => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const context = graph.createContext();
+        context.setVariable("eventData", value);
+
+        const serialized: any = {};
+        context.serialize(serialized);
+        const parsed = ParseFlowGraphContext(serialized, { graph });
+
+        expect(parsed.getVariable("eventData")).toEqual(value);
+    });
+
     it("Serializes and parses a graph", async () => {
         const mockContext: any = {};
         const pathConverter = new FlowGraphPathConverter(mockContext);
 
         const coordinator = new FlowGraphCoordinator({ scene });
         const graph = coordinator.createGraph();
+        graph.metadata = { source: { graph: 2 } };
         const context = graph.createContext();
 
         context.setVariable("test", 42);
@@ -218,6 +527,7 @@ describe("Flow Graph Serialization", () => {
         expect(serialized.allBlocks.length).toBe(3);
 
         const parsed = await ParseFlowGraphAsync(serialized, { coordinator, pathConverter });
+        expect(parsed.metadata).toEqual(graph.metadata);
         expect(parsed._eventBlocks[FlowGraphEventType.SceneReady].length).toBe(1);
         parsed.start();
 
@@ -285,6 +595,194 @@ describe("Flow Graph Serialization", () => {
         const parsedCoordinator = await ParseCoordinatorAsync(serializedCoordinator, { scene });
 
         expect(parsedCoordinator.dispatchEventsSynchronously).toBe(false);
+    });
+
+    it("uses reference provenance when parsing duplicate scene nodes", async () => {
+        const sourceScene = new Scene(engine);
+        const sourceFirst = new Mesh("part", sourceScene);
+        const sourceSecond = new Mesh("part", sourceScene);
+        sourceSecond.id = sourceFirst.id;
+        const source = new Mesh("source", sourceScene);
+        const sourceCoordinator = new FlowGraphCoordinator({ scene: sourceScene });
+        const sourceGraph = sourceCoordinator.createGraph();
+        const block = new FlowGraphMeshIntersectionEventBlock();
+        sourceGraph.addEventBlock(block);
+        (block.sourceMesh as any)._defaultValue = source;
+        (block.targetMeshes as any)._defaultValue = [sourceSecond];
+        const serialized: any = {};
+        sourceCoordinator.serialize(serialized);
+        serialized.referenceProvenance = [
+            [
+                sourceSecond.uniqueId,
+                {
+                    id: sourceSecond.id,
+                    name: sourceSecond.name,
+                    className: sourceSecond.getClassName(),
+                    idIndex: 1,
+                    nameIndex: 1,
+                    sceneUid: sourceScene.uid,
+                },
+            ],
+        ];
+        const targetFirst = new Mesh("part", scene);
+        const targetSecond = new Mesh("part", scene);
+        targetSecond.id = targetFirst.id;
+        const targetSource = new Mesh("source", scene);
+
+        const parsedCoordinator = await ParseCoordinatorAsync(serialized, { scene });
+        const parsedBlock = parsedCoordinator.flowGraphs[0].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        const context = parsedCoordinator.flowGraphs[0].createContext();
+        const intersects = vi.spyOn(targetSource, "intersectsMesh").mockReturnValue(true);
+        const activate = vi.spyOn(parsedBlock.onEnter as any, "_activateSignal");
+
+        expect((parsedBlock.targetMeshes as any)._defaultValue).toEqual([targetSecond]);
+        expect((parsedBlock.targetMeshes as any)._defaultValue).not.toEqual([targetFirst]);
+        parsedBlock._executeEvent(context, null);
+        expect(intersects).toHaveBeenCalledWith(targetSecond, false);
+        expect(activate).toHaveBeenCalledWith(context);
+
+        targetSecond.name = "renamed";
+        const resolvedSerialization: any = {};
+        parsedCoordinator.serialize(resolvedSerialization);
+        expect(resolvedSerialization._flowGraphs[0].referenceProvenance).toContainEqual([
+            targetSecond.uniqueId,
+            expect.objectContaining({ name: "renamed", idIndex: 1, nameIndex: 0, sceneUid: scene.uid }),
+        ]);
+        const nextScene = new Scene(engine);
+        const nextFirst = new Mesh("part", nextScene);
+        const nextSecond = new Mesh("renamed", nextScene);
+        nextSecond.id = nextFirst.id;
+        new Mesh("source", nextScene);
+        const reparsedResolvedCoordinator = await ParseCoordinatorAsync(resolvedSerialization, { scene: nextScene });
+        const reparsedResolvedBlock = reparsedResolvedCoordinator.flowGraphs[0].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        expect((reparsedResolvedBlock.targetMeshes as any)._defaultValue).toEqual([nextSecond]);
+
+        reparsedResolvedCoordinator.dispose();
+        nextScene.dispose();
+        parsedCoordinator.dispose();
+        targetSecond.dispose();
+        const missingTargetCoordinator = await ParseCoordinatorAsync(serialized, { scene });
+        const missingTargetBlock = missingTargetCoordinator.flowGraphs[0].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        expect((missingTargetBlock.targetMeshes as any)._defaultValue).not.toEqual([targetFirst]);
+        expect((missingTargetBlock.targetMeshes as any)._defaultValue).toEqual([expect.objectContaining({ uniqueId: sourceSecond.uniqueId })]);
+
+        const reserialized: any = {};
+        missingTargetCoordinator.serialize(reserialized);
+        expect(reserialized._flowGraphs[0].referenceProvenance).toEqual(serialized.referenceProvenance);
+        const reparsedCoordinator = await ParseCoordinatorAsync(reserialized, { scene });
+        const reparsedBlock = reparsedCoordinator.flowGraphs[0].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        expect((reparsedBlock.targetMeshes as any)._defaultValue).not.toEqual([targetFirst]);
+        expect((reparsedBlock.targetMeshes as any)._defaultValue).toEqual([expect.objectContaining({ uniqueId: sourceSecond.uniqueId })]);
+
+        reparsedCoordinator.dispose();
+        missingTargetCoordinator.dispose();
+        sourceCoordinator.dispose();
+        sourceScene.dispose();
+    });
+
+    it("refreshes overlapping resolved provenance identities before reserialization", async () => {
+        const sourceScene = new Scene(engine);
+        const sourceB = new Mesh("B", sourceScene);
+        const sourceC = new Mesh("C", sourceScene);
+        (sourceB as any).uniqueId = 10;
+        (sourceC as any).uniqueId = 11;
+        const sourceCoordinator = new FlowGraphCoordinator({ scene: sourceScene });
+        const sourceGraph = sourceCoordinator.createGraph();
+        const blockB = new FlowGraphMeshIntersectionEventBlock();
+        const blockC = new FlowGraphMeshIntersectionEventBlock();
+        sourceGraph.addEventBlock(blockB);
+        sourceGraph.addEventBlock(blockC);
+        (blockB.targetMeshes as any)._defaultValue = [sourceB];
+        (blockC.targetMeshes as any)._defaultValue = [sourceC];
+        const serialized: any = {};
+        sourceCoordinator.serialize(serialized);
+        serialized.referenceProvenance = [
+            [10, { id: sourceB.id, name: sourceB.name, className: sourceB.getClassName(), idIndex: 0, nameIndex: 0, sceneUid: sourceScene.uid }],
+            [11, { id: sourceC.id, name: sourceC.name, className: sourceC.getClassName(), idIndex: 0, nameIndex: 0, sceneUid: sourceScene.uid }],
+        ];
+
+        const destinationScene = new Scene(engine);
+        const destinationB = new Mesh("B", destinationScene);
+        const destinationC = new Mesh("C", destinationScene);
+        (destinationB as any).uniqueId = 11;
+        (destinationC as any).uniqueId = 12;
+        const parsed = await ParseCoordinatorAsync(serialized, { scene: destinationScene });
+        const reserialized: any = {};
+        parsed.serialize(reserialized);
+        expect(reserialized._flowGraphs[0].referenceProvenance).toEqual(
+            expect.arrayContaining([
+                [11, expect.objectContaining({ name: "B" })],
+                [12, expect.objectContaining({ name: "C" })],
+            ])
+        );
+
+        const finalScene = new Scene(engine);
+        const finalB = new Mesh("B", finalScene);
+        const finalC = new Mesh("C", finalScene);
+        const reparsed = await ParseCoordinatorAsync(reserialized, { scene: finalScene });
+        const reparsedBlocks = reparsed.flowGraphs[0].getAllBlocks() as FlowGraphMeshIntersectionEventBlock[];
+        expect((reparsedBlocks[0].targetMeshes as any)._defaultValue).toEqual([finalB]);
+        expect((reparsedBlocks[1].targetMeshes as any)._defaultValue).toEqual([finalC]);
+
+        reparsed.dispose();
+        finalScene.dispose();
+        parsed.dispose();
+        destinationScene.dispose();
+        sourceCoordinator.dispose();
+        sourceScene.dispose();
+    });
+
+    it("keeps provenance local to separately parsed graphs", async () => {
+        const firstNode = new Mesh("first", scene);
+        const secondNode = new Mesh("second", scene);
+        (firstNode as any).uniqueId = 10;
+        (secondNode as any).uniqueId = 10;
+        const firstCoordinator = new FlowGraphCoordinator({ scene });
+        const firstGraph = firstCoordinator.createGraph();
+        const firstBlock = new FlowGraphMeshIntersectionEventBlock();
+        firstGraph.addEventBlock(firstBlock);
+        (firstBlock.targetMeshes as any)._defaultValue = [firstNode];
+        const firstSerialized: any = {};
+        firstGraph.serialize(firstSerialized);
+        firstSerialized.referenceProvenance = [
+            [firstNode.uniqueId, { id: firstNode.id, name: firstNode.name, className: firstNode.getClassName(), idIndex: 0, nameIndex: 0, sceneUid: scene.uid }],
+        ];
+
+        const secondCoordinator = new FlowGraphCoordinator({ scene });
+        const secondGraph = secondCoordinator.createGraph();
+        const secondBlock = new FlowGraphMeshIntersectionEventBlock();
+        secondGraph.addEventBlock(secondBlock);
+        (secondBlock.targetMeshes as any)._defaultValue = [secondNode];
+        const secondSerialized: any = {};
+        secondGraph.serialize(secondSerialized);
+        secondSerialized.referenceProvenance = [
+            [secondNode.uniqueId, { id: secondNode.id, name: secondNode.name, className: secondNode.getClassName(), idIndex: 0, nameIndex: 0, sceneUid: scene.uid }],
+        ];
+
+        const targetCoordinator = new FlowGraphCoordinator({ scene });
+        await ParseFlowGraphAsync(firstSerialized, { coordinator: targetCoordinator });
+        await ParseFlowGraphAsync(secondSerialized, { coordinator: targetCoordinator });
+        const merged: any = {};
+        targetCoordinator.serialize(merged);
+
+        expect(merged.referenceProvenance).toBeUndefined();
+        expect(merged._flowGraphs[0].referenceProvenance).toContainEqual([firstNode.uniqueId, expect.objectContaining({ name: firstNode.name })]);
+        expect(merged._flowGraphs[1].referenceProvenance).toContainEqual([secondNode.uniqueId, expect.objectContaining({ name: secondNode.name })]);
+
+        const reloadScene = new Scene(engine);
+        const reloadedFirst = new Mesh("first", reloadScene);
+        const reloadedSecond = new Mesh("second", reloadScene);
+        const reloaded = await ParseCoordinatorAsync(merged, { scene: reloadScene });
+        const reloadedFirstBlock = reloaded.flowGraphs[0].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        const reloadedSecondBlock = reloaded.flowGraphs[1].getAllBlocks()[0] as FlowGraphMeshIntersectionEventBlock;
+        expect((reloadedFirstBlock.targetMeshes as any)._defaultValue).toEqual([reloadedFirst]);
+        expect((reloadedSecondBlock.targetMeshes as any)._defaultValue).toEqual([reloadedSecond]);
+
+        reloaded.dispose();
+        reloadScene.dispose();
+        targetCoordinator.dispose();
+        firstCoordinator.dispose();
+        secondCoordinator.dispose();
     });
 
     it("returns the active flow graph from a snippet", async () => {
@@ -432,6 +930,44 @@ describe("Flow Graph Serialization", () => {
 
         oldScene.dispose();
         previewScene.dispose();
+    });
+
+    it("setScene re-resolves arrays of node references against the new scene", () => {
+        const coordinator = new FlowGraphCoordinator({ scene });
+        const graph = coordinator.createGraph();
+        const block = new FlowGraphSetPropertyBlock<Vector3, FlowGraphAssetType.Mesh>({ propertyName: "position" });
+        graph.addBlock(block);
+
+        const oldScene = new Scene(engine);
+        const oldGoomba = new Mesh("goomba", oldScene);
+        (block.object as any)._defaultValue = [{ id: "hero", name: "hero", className: "Mesh", uniqueId: 20 }, oldGoomba, { id: "missing", className: "Mesh" }];
+
+        const previewScene = new Scene(engine);
+        const liveHero = new Mesh("hero", previewScene);
+        const liveGoomba = new Mesh("goomba", previewScene);
+
+        graph.setScene(previewScene);
+
+        const value = block.object.getValue(graph.createContext()) as unknown as any[];
+        expect(value[0]).toBe(liveHero);
+        expect(value[1]).toBe(liveGoomba);
+        expect(value[2]).toEqual({ id: "missing", className: "Mesh" });
+
+        oldScene.dispose();
+        previewScene.dispose();
+    });
+
+    it("serializes arrays mixing live nodes and unresolved node references", () => {
+        const mesh = new Mesh("live", scene);
+        const unresolved = { id: "later", name: "later", className: "Mesh", uniqueId: 7 };
+        const serialized: any = {};
+        defaultValueSerializationFunction("targets", [mesh, unresolved], serialized);
+        expect(serialized.targets).toEqual([{ id: mesh.id, name: "live", className: "Mesh", uniqueId: mesh.uniqueId }, unresolved]);
+        expect(serialized.targets[1]).not.toBe(unresolved);
+
+        const parsed = defaultValueParseFunction("targets", serialized, scene, scene);
+        expect(parsed[0]).toBe(mesh);
+        expect(parsed[1]).toEqual(unresolved);
     });
 
     it("Event block fires both out and done signals after round-trip", async () => {

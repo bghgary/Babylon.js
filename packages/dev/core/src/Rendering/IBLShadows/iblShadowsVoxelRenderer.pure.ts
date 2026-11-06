@@ -3,7 +3,7 @@
 import { Constants } from "../../Engines/constants";
 import { type Engine } from "../../Engines/engine.pure";
 import { ShaderMaterial } from "../../Materials/shaderMaterial.pure";
-import { MultiRenderTarget } from "../../Materials/Textures/multiRenderTarget.pure";
+import { MultiRenderTarget, type IMultiRenderTargetOptions } from "../../Materials/Textures/multiRenderTarget.pure";
 import { RenderTargetTexture, type RenderTargetTextureOptions } from "../../Materials/Textures/renderTargetTexture.pure";
 import { type TextureSize } from "../../Materials/Textures/textureCreationOptions";
 import { Color4 } from "../../Maths/math.color.pure";
@@ -23,7 +23,8 @@ import { type WebGPUEngine } from "../../Engines/webgpuEngine.pure";
 import { type IblShadowsRenderPipeline } from "./iblShadowsRenderPipeline.pure";
 import { type RenderTargetWrapper } from "core/Engines/renderTargetWrapper";
 import { ShaderLanguage } from "core/Materials/shaderLanguage";
-import { type GaussianSplattingMesh, IsGaussianSplattingClassName } from "../../Meshes/GaussianSplatting/gaussianSplattingMesh.pure";
+import { type GaussianSplattingMesh } from "../../Meshes/GaussianSplatting/gaussianSplattingMesh.pure";
+import { _IsGaussianSplattingMesh } from "../../Meshes/GaussianSplatting/gaussianSplatting.functions";
 import { type GaussianSplattingMaterial } from "../../Materials/GaussianSplatting/gaussianSplattingMaterial.pure";
 
 // Max frames _renderVoxelGrid waits for splat depth sorts to settle before voxelizing anyway
@@ -41,11 +42,11 @@ function _HasGaussianSplatting(meshes: Mesh[]): boolean {
         if (!mesh) {
             continue;
         }
-        if (IsGaussianSplattingClassName(mesh.getClassName())) {
+        if (_IsGaussianSplattingMesh(mesh)) {
             return true;
         }
         for (const child of mesh.getChildMeshes()) {
-            if (IsGaussianSplattingClassName(child.getClassName())) {
+            if (_IsGaussianSplattingMesh(child)) {
                 return true;
             }
         }
@@ -500,6 +501,31 @@ export class _IblShadowsVoxelRenderer {
         compute.dispatch(groups, groups, groups);
     }
 
+    /**
+     * Builds the options of one voxelization slab MRT. Every attachment renders into a Z-slice of the shared voxel
+     * grid, which is attached afterwards through setInternalTexture, so the attachment slots are deferred
+     * (target type -1) instead of allocating a throw-away volume per draw buffer.
+     * @param maxDrawBuffers number of draw buffers (attachments) of the MRT
+     * @param voxelResolution resolution of the voxel grid
+     * @param mrtIndex index of the slab
+     * @returns the MRT creation options
+     * @internal
+     */
+    public static _CreateVoxelSlabMRTOptions(maxDrawBuffers: number, voxelResolution: number, mrtIndex: number): IMultiRenderTargetOptions {
+        return {
+            types: new Array(maxDrawBuffers).fill(Constants.TEXTURETYPE_UNSIGNED_BYTE),
+            samplingModes: new Array(maxDrawBuffers).fill(Constants.TEXTURE_TRILINEAR_SAMPLINGMODE),
+            generateMipMaps: false,
+            targetTypes: new Array(maxDrawBuffers).fill(-1),
+            formats: new Array(maxDrawBuffers).fill(Constants.TEXTUREFORMAT_R),
+            faceIndex: new Array(maxDrawBuffers).fill(0),
+            layerIndex: Array.from({ length: maxDrawBuffers }, (_, index) => mrtIndex * maxDrawBuffers + index),
+            layerCounts: new Array(maxDrawBuffers).fill(voxelResolution),
+            generateDepthBuffer: false,
+            generateStencilBuffer: false,
+        };
+    }
+
     private _createVoxelMRTs(name: string, voxelRT: RenderTargetTexture, numSlabs: number): MultiRenderTarget[] {
         voxelRT.wrapU = Texture.CLAMP_ADDRESSMODE;
         voxelRT.wrapV = Texture.CLAMP_ADDRESSMODE;
@@ -508,12 +534,8 @@ export class _IblShadowsVoxelRenderer {
         voxelRT.wrapR = Texture.CLAMP_ADDRESSMODE;
         voxelRT.noPrePassRenderer = true;
         const mrtArray: MultiRenderTarget[] = [];
-        const targetTypes = new Array(this._maxDrawBuffers).fill(Constants.TEXTURE_3D);
 
         for (let mrtIndex = 0; mrtIndex < numSlabs; mrtIndex++) {
-            let layerIndices = new Array(this._maxDrawBuffers).fill(0);
-            layerIndices = layerIndices.map((value, index) => mrtIndex * this._maxDrawBuffers + index);
-
             let textureNames = new Array(this._maxDrawBuffers).fill("");
             textureNames = textureNames.map((value, index) => "voxel_grid_" + name + (mrtIndex * this._maxDrawBuffers + index));
 
@@ -522,18 +544,7 @@ export class _IblShadowsVoxelRenderer {
                 { width: this._voxelResolution, height: this._voxelResolution, depth: this._voxelResolution },
                 this._maxDrawBuffers, // number of draw buffers
                 this._scene,
-                {
-                    types: new Array(this._maxDrawBuffers).fill(Constants.TEXTURETYPE_UNSIGNED_BYTE),
-                    samplingModes: new Array(this._maxDrawBuffers).fill(Constants.TEXTURE_TRILINEAR_SAMPLINGMODE),
-                    generateMipMaps: false,
-                    targetTypes,
-                    formats: new Array(this._maxDrawBuffers).fill(Constants.TEXTUREFORMAT_R),
-                    faceIndex: new Array(this._maxDrawBuffers).fill(0),
-                    layerIndex: layerIndices,
-                    layerCounts: new Array(this._maxDrawBuffers).fill(this._voxelResolution),
-                    generateDepthBuffer: false,
-                    generateStencilBuffer: false,
-                },
+                _IblShadowsVoxelRenderer._CreateVoxelSlabMRTOptions(this._maxDrawBuffers, this._voxelResolution, mrtIndex),
                 textureNames
             );
 
@@ -724,9 +735,23 @@ export class _IblShadowsVoxelRenderer {
                     continue;
                 }
                 for (const mesh of renderList) {
-                    if (IsGaussianSplattingClassName(mesh.getClassName()) && !(mesh as GaussianSplattingMesh)._isDepthSortSettled) {
-                        gsSortPending = true;
-                        break;
+                    if (_IsGaussianSplattingMesh(mesh)) {
+                        const splatMesh = mesh as GaussianSplattingMesh;
+                        if (!splatMesh._isDepthSortSettled) {
+                            // Point color passes defer classic sorts. Request the voxel pass's index
+                            // preparation before waiting, otherwise no classic consumer can release the wait.
+                            const renderPassId = this._engine.currentRenderPassId;
+                            this._engine.currentRenderPassId = this._renderTargets[i].renderPassId;
+                            try {
+                                splatMesh._postToWorker();
+                            } finally {
+                                this._engine.currentRenderPassId = renderPassId;
+                            }
+                            if (!splatMesh._isDepthSortSettled) {
+                                gsSortPending = true;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -870,7 +895,7 @@ export class _IblShadowsVoxelRenderer {
             for (let i = 0; i < subMeshes.length; i++) {
                 const sm = subMeshes.data[i];
                 const effective = sm.getEffectiveMesh();
-                if (IsGaussianSplattingClassName(effective.getClassName())) {
+                if (_IsGaussianSplattingMesh(effective)) {
                     renderGsSplat(sm);
                 } else {
                     sm.render(enableAlphaMode);
@@ -962,7 +987,7 @@ export class _IblShadowsVoxelRenderer {
                 }
                 // Push per-slab uniforms to each GS voxel material in this MRT's render list.
                 for (const m of mrt.renderList ?? []) {
-                    if (IsGaussianSplattingClassName(m.getClassName())) {
+                    if (_IsGaussianSplattingMesh(m)) {
                         const gsVoxelMat = this._gsVoxelMaterialCache.get(m.uniqueId);
                         if (gsVoxelMat) {
                             gsVoxelMat.setMatrix("invWorldScale", this._invWorldScaleMatrix);
@@ -991,7 +1016,7 @@ export class _IblShadowsVoxelRenderer {
                 if (!mesh) {
                     continue;
                 }
-                if (IsGaussianSplattingClassName(mesh.getClassName())) {
+                if (_IsGaussianSplattingMesh(mesh)) {
                     this._addGsMeshToVoxelRT(mrt, mesh as GaussianSplattingMesh);
                 } else if (mesh.subMeshes && mesh.subMeshes.length > 0) {
                     mrt.renderList?.push(mesh);
@@ -999,7 +1024,7 @@ export class _IblShadowsVoxelRenderer {
                 }
                 const meshes = mesh.getChildMeshes();
                 for (const childMesh of meshes) {
-                    if (IsGaussianSplattingClassName(childMesh.getClassName())) {
+                    if (_IsGaussianSplattingMesh(childMesh)) {
                         this._addGsMeshToVoxelRT(mrt, childMesh as GaussianSplattingMesh);
                     } else if (childMesh.subMeshes && childMesh.subMeshes.length > 0) {
                         mrt.renderList?.push(childMesh);

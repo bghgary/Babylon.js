@@ -2,9 +2,13 @@
     #if NUM_SAMPLES > 0
 
     #if defined(WEBGL2) || defined(WEBGPU) || defined(NATIVE)
+        // Some drivers (e.g. certain Android/Adreno implementations) default fragment-shader int/uint
+        // precision to mediump, which silently corrupts the 32-bit bit manipulation below.
+        precision highp int;
+
         // https://learnopengl.com/PBR/IBL/Specular-IBL
         // Hammersley
-        float radicalInverse_VdC(uint bits) 
+        float radicalInverse_VdC(uint bits)
         {
             bits = (bits << 16u) | (bits >> 16u);
             bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
@@ -229,6 +233,11 @@
                     vec2 T;
                     T.x = texture2D(icdfSampler, vec2(Xi.x, 0.)).x;
                     T.y = texture2D(icdfSampler, vec2(T.x, Xi.y)).y;
+                    #if defined(WEBGL2) || defined(WEBGPU) || defined(NATIVE)
+                    // Evaluate radiance at the icdf bin center, where the luminance and pdf were computed.
+                    vec2 icdfSize = vec2(textureSize(icdfSampler, 0));
+                    T = (min(floor(T * icdfSize), icdfSize - 1.0) + 0.5) / icdfSize;
+                    #endif
                     vec3 Ls = uv_to_normal(vec2(1.0 - fract(T.x + 0.25), T.y));
                     float NoL = dot(n, Ls);
                     float NoV = dot(n, inputV);

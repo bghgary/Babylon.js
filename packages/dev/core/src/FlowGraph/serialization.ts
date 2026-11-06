@@ -5,9 +5,16 @@ import { Matrix, Quaternion, Vector2, Vector3, Vector4 } from "../Maths/math.vec
 import { type Scene } from "../scene";
 import { FlowGraphBlockNames } from "./Blocks/flowGraphBlockNames";
 import { FlowGraphInteger } from "./CustomTypes/flowGraphInteger.pure";
-import { FlowGraphTypes, getRichTypeByFlowGraphType } from "./flowGraphRichTypes.pure";
+import { FlowGraphTypes } from "./flowGraphRichTypes.pure";
 import { type Node } from "core/node";
 import { FlowGraphMatrix2D, FlowGraphMatrix3D } from "./CustomTypes/flowGraphMatrix";
+
+const _DefaultEventDataParseCounts = new WeakMap<object, number>();
+
+/** @internal */
+export function _GetDefaultEventDataParseCount(value: unknown): number {
+    return value !== null && typeof value === "object" ? (_DefaultEventDataParseCounts.get(value) ?? 0) : 0;
+}
 
 function IsVectorClassName(className: string) {
     return (
@@ -26,6 +33,30 @@ function IsMatrixClassName(className: string) {
 
 function IsAnimationGroupClassName(className: string) {
     return className === "AnimationGroup";
+}
+
+function IsSerializableObjectReference(value: any): boolean {
+    return !!value && typeof value.getClassName === "function" && !!(value.id || value.name);
+}
+
+function SerializeObjectReference(value: any) {
+    return {
+        id: value.id,
+        name: value.name,
+        className: value.getClassName(),
+        uniqueId: value.uniqueId,
+    };
+}
+
+/**
+ * Checks whether a value is a serialized scene node reference (`{ id, name, className, uniqueId }`)
+ * that was not resolved yet.
+ * @param value the value to check
+ * @returns true if the value is a serialized node reference
+ * @internal
+ */
+export function _IsSerializedNodeReference(value: any): boolean {
+    return !!value && typeof value === "object" && typeof value.className === "string" && !!(value.id || value.name) && value.value === undefined;
 }
 
 /**
@@ -100,12 +131,10 @@ export function defaultValueSerializationFunction(key: string, value: any, seria
         };
     } else {
         if (className && (value.id || value.name)) {
-            serializationObject[key] = {
-                id: value.id,
-                name: value.name,
-                className,
-                uniqueId: value.uniqueId,
-            };
+            serializationObject[key] = SerializeObjectReference(value);
+        } else if (Array.isArray(value) && value.length > 0 && value.every((entry) => IsSerializableObjectReference(entry) || _IsSerializedNodeReference(entry))) {
+            // Live nodes are converted to references; entries that are still unresolved references are kept as they are.
+            serializationObject[key] = value.map((entry) => (IsSerializableObjectReference(entry) ? SerializeObjectReference(entry) : { ...entry }));
         } else {
             if (typeof value !== "object" || value === null) {
                 serializationObject[key] = value;
@@ -138,8 +167,8 @@ export function defaultValueSerializationFunction(key: string, value: any, seria
  * @param key the key to the value that will be parsed
  * @param serializationObject the object that will be parsed
  * @param assetsContainer the assets container that will be used to find the objects
- * @param scene
- * @returns
+ * @param scene the scene used to resolve node and animation group references
+ * @returns the parsed value, with serialized Babylon types and scene references restored
  */
 // eslint-disable-next-line @typescript-eslint/naming-convention
 export function defaultValueParseFunction(key: string, serializationObject: any, assetsContainer: IAssetContainer, scene: Scene) {
@@ -166,33 +195,16 @@ export function defaultValueParseFunction(key: string, serializationObject: any,
         finalValue = FlowGraphInteger.FromValue(intermediateValue.value);
     } else if (className === FlowGraphTypes.Number || className === FlowGraphTypes.String || className === FlowGraphTypes.Boolean) {
         finalValue = intermediateValue.value[0];
+    } else if (key === "eventData" && intermediateValue !== null && typeof intermediateValue === "object") {
+        _DefaultEventDataParseCounts.set(intermediateValue, _GetDefaultEventDataParseCount(intermediateValue) + 1);
+        finalValue = intermediateValue;
     } else if (intermediateValue && intermediateValue.value !== undefined) {
         finalValue = intermediateValue.value;
+    } else if (Array.isArray(intermediateValue) && intermediateValue.length > 0 && intermediateValue.every(_IsSerializedNodeReference)) {
+        // An array of node references. Unresolved entries are kept so they can be re-resolved when the scene changes.
+        finalValue = intermediateValue.map((reference) => GetSceneNodeFromSerializedReference(reference, scene) ?? reference);
     } else {
-        if (Array.isArray(intermediateValue)) {
-            // Check if this is an event configuration array (objects with id/eventData)
-            // versus a plain array of primitives (e.g. variable name lists)
-            if (intermediateValue.length > 0 && typeof intermediateValue[0] === "object" && intermediateValue[0] !== null && "eventData" in intermediateValue[0]) {
-                // configuration data of an event
-                finalValue = intermediateValue.reduce((acc, val) => {
-                    if (!val.eventData) {
-                        return acc;
-                    }
-                    acc[val.id] = {
-                        type: getRichTypeByFlowGraphType(val.type),
-                    };
-                    if (typeof val.value !== "undefined") {
-                        acc[val.id].value = defaultValueParseFunction("value", val, assetsContainer, scene);
-                    }
-                    return acc;
-                }, {});
-            } else {
-                // Plain array of primitives — return as-is
-                finalValue = intermediateValue;
-            }
-        } else {
-            finalValue = intermediateValue;
-        }
+        finalValue = intermediateValue;
     }
     return finalValue;
 }
