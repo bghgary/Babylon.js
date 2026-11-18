@@ -186,6 +186,9 @@ export interface INode extends GLTF2.INode, IArrayItem {
     /** Whether the node and its descendants are visible. */
     visible?: boolean;
 
+    /** The external asset instantiated by this node. */
+    externalAsset?: number;
+
     /** @internal */
     parent?: INode;
 
@@ -328,6 +331,30 @@ export interface IGLTF extends GLTF2.IGLTF {
 
     /** @internal */
     textures?: ITexture[];
+
+    /** @internal */
+    files?: IFile[];
+
+    /** @internal */
+    externalAssets?: IExternalAsset[];
+}
+
+/** @internal */
+export interface IFile extends GLTF2.IProperty, IArrayItem {
+    /** Media type of the referenced file. */
+    mimeType: string;
+    /** URI of the referenced file. */
+    uri?: string;
+    /** Buffer view containing the file. */
+    bufferView?: number;
+    /** Overrides for resources referenced by a glTF file. */
+    aliases?: { alias: string; file: number }[];
+}
+
+/** @internal */
+export interface IExternalAsset extends GLTF2.IProperty, IArrayItem {
+    /** Index of the referenced file. */
+    file: number;
 }
 
 /**

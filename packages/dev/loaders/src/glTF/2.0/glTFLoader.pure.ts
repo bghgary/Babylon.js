@@ -56,6 +56,7 @@ import {
     type ITextureInfo,
     type ITexture,
     type IImage,
+    type IFile,
     type IMeshPrimitive,
     type IArrayItem,
     type _ISamplerData,
@@ -81,7 +82,7 @@ import { deepMerge } from "core/Misc/deepMerger";
 import { GetTypedArrayConstructor } from "core/Buffers/bufferUtils";
 import { Lazy } from "core/Misc/lazy";
 import { type IMaterialLoadingAdapter } from "./materialLoadingAdapter";
-import { InitializeNodeVisibility } from "./glTFLoaderVisibility";
+import { InitializeNodeVisibility, LinkNodeVisibility } from "./glTFLoaderVisibility";
 
 // Caching these dynamic imports gives a surprising perf boost (compared to importing them directly each time).
 const LazyAnimationGroupModulePromise = /*#__PURE__*/ new Lazy(() => import("core/Animations/animationGroup.pure"));
@@ -98,6 +99,11 @@ interface ILoaderProperty extends IProperty {
 interface IWithMetadata {
     metadata: any;
     _internalMetadata: any;
+}
+
+interface IExternalFileSource {
+    loader: GLTFLoader;
+    file: IFile;
 }
 
 /**
@@ -230,6 +236,13 @@ export class GLTFLoader implements IGLTFLoader {
     private readonly _postSceneLoadActions = new Array<() => void>();
     private readonly _materialAdapterCache = new WeakMap<Material, IMaterialLoadingAdapter>();
     private readonly _materialAdapters = new Set<IMaterialLoadingAdapter>();
+    private readonly _externalResults: ISceneLoaderAsyncResult[] = [];
+    private readonly _externalNodes = new Map<INode, INode[]>();
+    private readonly _externalFileLoaders = new Set<GLTFFileLoader>();
+    private _uriAliases = new Map<string, IExternalFileSource>();
+    private _externalAncestors = new Set<string>();
+    private _externalIdentity = "";
+    private _isExternalAsset = false;
 
     /**
      * Loaded PBR material implementations, keyed by their identifier (e.g. "pbr", "openpbr").
@@ -394,6 +407,10 @@ export class GLTFLoader implements IGLTFLoader {
         this._extensions.length = 0;
 
         this._materialAdapters.clear();
+        for (const loader of this._externalFileLoaders) {
+            loader.dispose();
+        }
+        this._externalFileLoaders.clear();
 
         (this._gltf as Nullable<IGLTF>) = null; // TODO
         this._bin = null;
@@ -448,13 +465,13 @@ export class GLTFLoader implements IGLTFLoader {
 
             return await this._loadAsync(rootUrl, fileName, nodes, () => {
                 return {
-                    meshes: this._getMeshes(),
+                    meshes: this._getMeshes().concat(...this._externalResults.map((result) => result.meshes)),
                     particleSystems: [],
-                    skeletons: this._getSkeletons(),
-                    animationGroups: this._getAnimationGroups(),
-                    lights: this._babylonLights,
-                    transformNodes: this._getTransformNodes(),
-                    geometries: this._getGeometries(),
+                    skeletons: this._getSkeletons().concat(...this._externalResults.map((result) => result.skeletons)),
+                    animationGroups: this._getAnimationGroups().concat(...this._externalResults.map((result) => result.animationGroups)),
+                    lights: this._babylonLights.concat(...this._externalResults.map((result) => result.lights)),
+                    transformNodes: this._getTransformNodes().concat(...this._externalResults.map((result) => result.transformNodes)),
+                    geometries: this._getGeometries().concat(...this._externalResults.map((result) => result.geometries)),
                     spriteManagers: [],
                 };
             });
@@ -474,6 +491,12 @@ export class GLTFLoader implements IGLTFLoader {
         return await Promise.resolve()
             .then(async () => {
                 this._rootUrl = rootUrl;
+                if (!this._externalIdentity && this._gltf.externalAssets?.length) {
+                    this._externalIdentity = GLTFLoader._GetResourceIdentity(rootUrl + fileName);
+                    if (fileName) {
+                        this._externalAncestors.add(this._externalIdentity);
+                    }
+                }
                 this._uniqueRootUrl = !rootUrl.startsWith("file:") && fileName ? rootUrl : `${rootUrl}${RandomGUID()}/`;
                 this._fileName = fileName;
                 this._allMaterialsDirtyRequired = false;
@@ -614,10 +637,19 @@ export class GLTFLoader implements IGLTFLoader {
                     const visibilityExtensionEnabled = this._extensions.some((extension) => extension.name === "KHR_node_visibility" && extension.enabled);
                     if (
                         this._gltf.nodes &&
-                        (visibilityExtensionEnabled || version[0] > 2 || (version[0] === 2 && version[1] >= 1) || this._gltf.nodes.some((node) => node.visible !== undefined))
+                        (this._isExternalAsset ||
+                            this._externalNodes.size > 0 ||
+                            visibilityExtensionEnabled ||
+                            version[0] > 2 ||
+                            (version[0] === 2 && version[1] >= 1) ||
+                            this._gltf.nodes.some((node) => node.visible !== undefined))
                     ) {
                         InitializeNodeVisibility(this._gltf.nodes, visibilityExtensionEnabled);
+                        for (const [node, children] of this._externalNodes) {
+                            LinkNodeVisibility(node, children);
+                        }
                     }
+                    this._parent.onExtensionLoadedObservable.clear();
                     await this._extensionsOnReadyAsync();
                     this._parent._setState(GLTFLoaderState.READY);
                     if (!this._skipStartAnimationStep) {
@@ -702,6 +734,8 @@ export class GLTFLoader implements IGLTFLoader {
         ArrayItem.Assign(this._gltf.scenes);
         ArrayItem.Assign(this._gltf.skins);
         ArrayItem.Assign(this._gltf.textures);
+        ArrayItem.Assign(this._gltf.files);
+        ArrayItem.Assign(this._gltf.externalAssets);
 
         if (this._gltf.nodes) {
             const nodeParents: { [index: number]: number } = {};
@@ -751,8 +785,6 @@ export class GLTFLoader implements IGLTFLoader {
         this._extensions.push(...(await Promise.all(extensionPromises)));
 
         this._extensions.sort((a, b) => (a.order || Number.MAX_VALUE) - (b.order || Number.MAX_VALUE));
-        this._parent.onExtensionLoadedObservable.clear();
-
         if (this._gltf.extensionsRequired) {
             for (const name of this._gltf.extensionsRequired) {
                 const available = this._extensions.some((extension) => extension.name === name && extension.enabled);
@@ -1016,6 +1048,13 @@ export class GLTFLoader implements IGLTFLoader {
             }
 
             assign(babylonTransformNode);
+
+            if (node.externalAsset !== undefined) {
+                if (node.mesh !== undefined) {
+                    throw new Error(`${context}: A node cannot contain both a mesh and an external asset`);
+                }
+                promises.push(this._loadExternalAssetAsync(context, node, babylonTransformNode));
+            }
         };
 
         const hasMesh = node.mesh != undefined;
@@ -2862,6 +2901,11 @@ export class GLTFLoader implements IGLTFLoader {
             return extensionPromise;
         }
 
+        const alias = !uri.startsWith("data:") ? this._uriAliases.get(uri) : undefined;
+        if (alias) {
+            return alias.loader._loadFileReferenceAsync(alias.file);
+        }
+
         if (!this._parent._isPreprocessUrlAsyncSet && !GLTFLoader._ValidateUri(uri)) {
             throw new Error(`${context}: '${uri}' is invalid`);
         }
@@ -2874,7 +2918,8 @@ export class GLTFLoader implements IGLTFLoader {
 
         this.log(`${context}: Loading ${uri}`);
 
-        return this._parent.preprocessUrlAsync(this._rootUrl + uri, this._rootUrl ?? undefined).then((url) => {
+        const resourceUrl = this._getResourceUrl(uri);
+        return this._parent.preprocessUrlAsync(resourceUrl, this._rootUrl ?? undefined).then((url) => {
             return new Promise((resolve, reject) => {
                 this._parent._loadFile(
                     this._babylonScene,
@@ -2892,6 +2937,111 @@ export class GLTFLoader implements IGLTFLoader {
                 );
             });
         });
+    }
+
+    private _resolveFileReference(file: IFile): IExternalFileSource {
+        if (file.uri && !file.uri.startsWith("data:")) {
+            const alias = this._uriAliases.get(file.uri);
+            if (alias) {
+                return alias.loader._resolveFileReference(alias.file);
+            }
+        }
+        return { loader: this, file };
+    }
+
+    private _loadFileReferenceAsync(file: IFile): Promise<ArrayBufferView> {
+        const source = this._resolveFileReference(file);
+        if (source.loader !== this || source.file !== file) {
+            return source.loader._loadFileReferenceAsync(source.file);
+        }
+        const context = `/files/${file.index}`;
+        if (file.uri !== undefined && file.bufferView === undefined) {
+            return this.loadUriAsync(`${context}/uri`, file, file.uri);
+        }
+        if (file.bufferView !== undefined && file.uri === undefined) {
+            const bufferView = ArrayItem.Get(`${context}/bufferView`, this._gltf.bufferViews, file.bufferView);
+            return this.loadBufferViewAsync(`/bufferViews/${bufferView.index}`, bufferView);
+        }
+        throw new Error(`${context}: A file must define exactly one of uri or bufferView`);
+    }
+
+    private async _loadExternalAssetAsync(context: string, node: INode, parent: TransformNode): Promise<void> {
+        const asset = ArrayItem.Get(`${context}/externalAsset`, this._gltf.externalAssets, node.externalAsset);
+        const file = ArrayItem.Get(`/externalAssets/${asset.index}/file`, this._gltf.files, asset.file);
+        const source = this._resolveFileReference(file);
+        const sourceFile = source.file;
+        if (file.mimeType !== "model/gltf+json" && file.mimeType !== "model/gltf-binary") {
+            throw new Error(`/files/${file.index}: Unsupported external asset media type '${file.mimeType}'`);
+        }
+        const identity = sourceFile.uri
+            ? sourceFile.uri.startsWith("data:")
+                ? sourceFile.uri
+                : GLTFLoader._GetResourceIdentity(source.loader._getResourceUrl(sourceFile.uri))
+            : `${source.loader._externalIdentity}#bufferView=${sourceFile.bufferView}`;
+        if (this._externalAncestors.has(identity)) {
+            throw new Error(`${context}: Recursive external asset reference`);
+        }
+
+        const bytes = await source.loader._loadFileReferenceAsync(sourceFile);
+        const childFileLoader = new GLTFFileLoader({ ...this._parent, customRootNode: parent });
+        this._externalFileLoaders.add(childFileLoader);
+        childFileLoader.onDisposeObservable.addOnce(() => this._externalFileLoaders.delete(childFileLoader));
+        childFileLoader.onMeshLoadedObservable.add((value) => this._parent.onMeshLoadedObservable.notifyObservers(value));
+        childFileLoader.onSkinLoadedObservable.add((value) => this._parent.onSkinLoadedObservable.notifyObservers(value));
+        childFileLoader.onMaterialLoadedObservable.add((value) => this._parent.onMaterialLoadedObservable.notifyObservers(value));
+        childFileLoader.onTextureLoadedObservable.add((value) => this._parent.onTextureLoadedObservable.notifyObservers(value));
+        childFileLoader.onCameraLoadedObservable.add((value) => this._parent.onCameraLoadedObservable.notifyObservers(value));
+        childFileLoader.onExtensionLoadedObservable.add((value) => this._parent.onExtensionLoadedObservable.notifyObservers(value));
+        const data: IGLTFLoaderData =
+            file.mimeType === "model/gltf-binary" ? await childFileLoader._unpackBinaryViewAsync(bytes) : { json: JSON.parse(new TextDecoder().decode(bytes)), bin: null };
+        const childGltf = data.json as IGLTF;
+        const loader = childFileLoader._createNestedLoader(data);
+        if (!(loader instanceof GLTFLoader)) {
+            childFileLoader.dispose();
+            throw new Error(`${context}: External assets must use glTF 2.x`);
+        }
+        if (childGltf.scene === undefined || !childGltf.scenes) {
+            childFileLoader.dispose();
+            return;
+        }
+        loader._isExternalAsset = true;
+        loader._externalIdentity = identity;
+        loader._externalAncestors = new Set(this._externalAncestors);
+        loader._externalAncestors.add(identity);
+        for (const alias of file.aliases ?? []) {
+            loader._uriAliases.set(alias.alias, { loader: this, file: ArrayItem.Get(`/files/${file.index}/aliases`, this._gltf.files, alias.file) });
+        }
+        const childRootUrl =
+            sourceFile.uri && !sourceFile.uri.startsWith("data:")
+                ? Tools.GetFolderPath(source.loader._getResourceUrl(sourceFile.uri).split(/[?#]/, 1)[0])
+                : (source.loader._rootUrl ?? "");
+        const complete = childFileLoader.whenCompleteAsync();
+        complete.catch(() => {});
+        this._completePromises.push(complete);
+        const result = await loader.importMeshAsync(null, this._babylonScene, this._assetContainer, data, childRootUrl);
+        this._externalResults.push({ ...result, meshes: result.meshes.filter((mesh) => mesh !== parent) });
+        const childScene = ArrayItem.Get("/scene", childGltf.scenes, childGltf.scene);
+        this._externalNodes.set(
+            node,
+            (childScene.nodes ?? []).map((index) => ArrayItem.Get("/scene/nodes", childGltf.nodes, index))
+        );
+    }
+
+    private static _GetResourceIdentity(url: string): string {
+        return new URL(url, "file:///").href;
+    }
+
+    private _getResourceUrl(uri: string): string {
+        if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(uri)) {
+            return uri;
+        }
+        if (uri.startsWith("/")) {
+            if (this._rootUrl && /^[a-z][a-z\d+.-]*:\/\//i.test(this._rootUrl)) {
+                return new URL(uri, this._rootUrl ?? undefined).href;
+            }
+            return uri;
+        }
+        return (this._rootUrl ?? "") + uri;
     }
 
     /**

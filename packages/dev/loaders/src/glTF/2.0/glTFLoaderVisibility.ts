@@ -30,6 +30,15 @@ export function SetNodeVisibility(node: INode, visible: boolean): void {
     UpdateNodeVisibility(node, node.parent?._visibility?.effective ?? true);
 }
 
+/** @internal */
+export function LinkNodeVisibility(parent: INode, children: INode[]): void {
+    for (const child of children) {
+        child.parent = parent;
+        parent._visibility!.children.push(child);
+        UpdateNodeVisibility(child, parent._visibility!.effective);
+    }
+}
+
 function UpdateNodeVisibility(node: INode, parentVisible: boolean): void {
     const updates: { node: INode; visible: boolean }[] = [];
     // Capture descendants before hiding ancestors, since their visibility may be inherited.
