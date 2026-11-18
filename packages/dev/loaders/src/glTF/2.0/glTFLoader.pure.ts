@@ -3214,7 +3214,7 @@ export class GLTFLoader implements IGLTFLoader {
         }
 
         const bytes = await source.loader._loadFileReferenceAsync(sourceFile);
-        const childFileLoader = new GLTFFileLoader({ ...this._parent, customRootNode: parent });
+        const childFileLoader = new GLTFFileLoader({ ...this._parent, loggingEnabled: this._parent.loggingEnabled, customRootNode: parent });
         this._externalFileLoaders.add(childFileLoader);
         childFileLoader.onDisposeObservable.addOnce(() => this._externalFileLoaders.delete(childFileLoader));
         childFileLoader.onMeshLoadedObservable.add((value) => this._parent.onMeshLoadedObservable.notifyObservers(value));

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VertexBuffer } from "core/Buffers/buffer";
 import { NullEngine } from "core/Engines/nullEngine";
 import { type IFileRequest } from "core/Misc/fileRequest";
+import { Logger } from "core/Misc/logger";
 import { Observable } from "core/Misc/observable";
 import { Tools } from "core/Misc/tools.pure";
 import { type Texture } from "core/Materials/Textures/texture";
@@ -53,6 +54,23 @@ describe("glTF 2.1 external assets", () => {
         expect(first.getChildren().map((node) => node.name)).toEqual(["existing", "inner"]);
         expect(second.getChildren().map((node) => node.name)).toEqual(["inner"]);
         expect(instances[0]).not.toBe(instances[1]);
+    });
+
+    it("logs nodes loaded from external assets when logging is enabled", async () => {
+        const inner = { asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: "external-child" }] };
+        const data = {
+            json: {
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0] }],
+                nodes: [{ externalAsset: 0 }],
+                externalAssets: [{ file: 0 }],
+                files: [{ mimeType: "model/gltf+json", uri: `data:model/gltf+json;base64,${btoa(JSON.stringify(inner))}` }],
+            },
+        };
+        const log = vi.spyOn(Logger, "Log");
+        await new GLTFFileLoader({ loggingEnabled: true }).loadAssetContainerAsync(scene, data, "");
+        expect(log.mock.calls.some(([message]) => message.includes("external-child"))).toBe(true);
     });
 
     it("runs each nested interactivity graph against its own asset instance", async () => {
