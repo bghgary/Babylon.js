@@ -4,6 +4,7 @@ import { NullEngine } from "core/Engines/nullEngine";
 import { type IFileRequest } from "core/Misc/fileRequest";
 import { Observable } from "core/Misc/observable";
 import { Tools } from "core/Misc/tools.pure";
+import { type Texture } from "core/Materials/Textures/texture";
 import { Scene } from "core/scene";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
@@ -120,6 +121,36 @@ describe("glTF 2.1 external assets", () => {
         visibility.info.set!(false, visibility.object);
         expect(mesh.isVisible).toBe(false);
         expect(container.geometries).toContain(mesh.geometry);
+    });
+
+    it("uses the aliased file's media type for an image", async () => {
+        const inner = {
+            asset: { version: "2.0" },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ mesh: 0 }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+            textures: [{ source: 0 }],
+            images: [{ uri: "image.png" }],
+            accessors: [{ componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [0, 0, 0] }],
+        };
+        const data = {
+            json: {
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0] }],
+                nodes: [{ externalAsset: 0 }],
+                externalAssets: [{ file: 0 }],
+                files: [
+                    { mimeType: "model/gltf+json", uri: `data:model/gltf+json;base64,${btoa(JSON.stringify(inner))}`, aliases: [{ alias: "image.png", file: 1 }] },
+                    { mimeType: "image/webp", uri: `data:image/webp;base64,${btoa("image bytes")}` },
+                ],
+            },
+        };
+        const container = await new GLTFFileLoader().loadAssetContainerAsync(scene, data, "");
+        expect(container.textures).toHaveLength(1);
+        expect((container.textures[0] as Texture).mimeType).toBe("image/webp");
     });
 
     it("loads an embedded binary asset from a buffer view", async () => {

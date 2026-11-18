@@ -2797,6 +2797,8 @@ export class GLTFLoader implements IGLTFLoader {
         const promises = new Array<Promise<unknown>>();
 
         const deferred = new Deferred<void>();
+        const alias = image.uri && !image.uri.startsWith("data:") ? this._uriAliases.get(image.uri) : undefined;
+        const aliasedFile = alias?.loader._resolveFileReference(alias.file).file;
         const textureCreationOptions: ITextureCreationOptions = {
             noMipmap: samplerData.noMipMaps,
             invertY: false,
@@ -2811,7 +2813,7 @@ export class GLTFLoader implements IGLTFLoader {
                     deferred.reject(new Error(`${context}: ${exception && exception.message ? exception.message : message || "Failed to load texture"}`));
                 }
             },
-            mimeType: image.mimeType ?? GetMimeType(image.uri ?? ""),
+            mimeType: aliasedFile?.mimeType ?? image.mimeType ?? GetMimeType(image.uri ?? ""),
             loaderOptions: textureLoaderOptions,
             useSRGBBuffer: !!useSRGBBuffer && this._parent.useSRGBBuffers,
         };
