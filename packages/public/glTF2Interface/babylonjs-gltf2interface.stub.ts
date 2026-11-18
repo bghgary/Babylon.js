@@ -8,7 +8,19 @@
  */
 
 /* eslint-disable @typescript-eslint/naming-convention */
-export const AccessorComponentType = { BYTE: 5120, UNSIGNED_BYTE: 5121, SHORT: 5122, UNSIGNED_SHORT: 5123, UNSIGNED_INT: 5125, FLOAT: 5126 };
+export const AccessorComponentType = {
+    BYTE: 5120,
+    UNSIGNED_BYTE: 5121,
+    SHORT: 5122,
+    UNSIGNED_SHORT: 5123,
+    INT: 5124,
+    UNSIGNED_INT: 5125,
+    FLOAT: 5126,
+    DOUBLE: 5130,
+    HALF_FLOAT: 5131,
+    INT64: 5134,
+    UNSIGNED_INT64: 5135,
+};
 export const AccessorType = { SCALAR: "SCALAR", VEC2: "VEC2", VEC3: "VEC3", VEC4: "VEC4", MAT2: "MAT2", MAT3: "MAT3", MAT4: "MAT4" };
 export const AnimationChannelTargetPath = { TRANSLATION: "translation", ROTATION: "rotation", SCALE: "scale", WEIGHTS: "weights", POINTER: "pointer" };
 export const AnimationSamplerInterpolation = { LINEAR: "LINEAR", STEP: "STEP", CUBICSPLINE: "CUBICSPLINE" };

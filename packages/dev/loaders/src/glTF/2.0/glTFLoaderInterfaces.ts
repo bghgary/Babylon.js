@@ -76,9 +76,6 @@ export interface IAnimation extends GLTF2.IAnimation, IArrayItem {
  * Loader interface with additional members.
  */
 export interface IBuffer extends GLTF2.IBuffer, IArrayItem {
-    /** The index of the GLB chunk containing this buffer. */
-    chunk?: number;
-
     /** @internal */
     _data?: Promise<ArrayBufferView>;
 }
@@ -135,9 +132,6 @@ export interface IMaterialPbrMetallicRoughness extends GLTF2.IMaterialPbrMetalli
  * Loader interface with additional members.
  */
 export interface IMaterial extends GLTF2.IMaterial, IArrayItem {
-    /** The multiplier for the material's emissive luminance. */
-    emissiveStrength?: number;
-
     /** @internal */
     pbrMetallicRoughness?: IMaterialPbrMetallicRoughness;
 
@@ -183,15 +177,6 @@ export interface IMeshPrimitive extends GLTF2.IMeshPrimitive, IArrayItem {
  * Loader interface with additional members.
  */
 export interface INode extends GLTF2.INode, IArrayItem {
-    /** Whether the node and its descendants are visible. */
-    visible?: boolean;
-
-    /** The external asset instantiated by this node. */
-    externalAsset?: number;
-
-    /** The node's authored bounding volume. */
-    boundingVolume?: IBoundingVolume;
-
     /** @internal */
     parent?: INode;
 
@@ -296,12 +281,6 @@ export interface ITextureInfo extends GLTF2.ITextureInfo {
  * Loader interface with additional members.
  */
 export interface IGLTF extends GLTF2.IGLTF {
-    /** Asset metadata, including the optional thumbnail image index. */
-    asset: GLTF2.IAsset & { thumbnail?: number };
-
-    /** Case-sensitive identifiers mapping to JSON pointers within this asset. */
-    uniqueIds?: Record<string, { pointer: string }>;
-
     /** @internal */
     accessors?: IAccessor[];
 
@@ -352,54 +331,16 @@ export interface IGLTF extends GLTF2.IGLTF {
 }
 
 /** A shape defined by a glTF asset. */
-export interface IShape extends GLTF2.IChildRootProperty, IArrayItem {
-    /** The type of shape. */
-    type: string;
-    /** Box dimensions, when the shape is a box. */
-    box?: { size?: number[] };
-    /** Sphere radius, when the shape is a sphere. */
-    sphere?: { radius?: number };
-    /** Capsule parameters. */
-    capsule?: { height?: number; radiusTop?: number; radiusBottom?: number };
-    /** Cylinder parameters. */
-    cylinder?: { height?: number; radiusTop?: number; radiusBottom?: number };
-    /** Plane extents. Omitted extents are infinite. */
-    plane?: { sizeX?: number; sizeZ?: number };
-    /** Mesh used by a mesh shape. */
-    mesh?: { mesh: number };
-    /** Mesh used by a convex mesh shape. */
-    convexMesh?: { mesh: number };
-}
+export interface IShape extends GLTF2.IShape, IArrayItem {}
 
 /** A shape instance used as a node's bounding volume. */
-export interface IBoundingVolume extends GLTF2.IProperty {
-    /** Index of the referenced shape. */
-    shape: number;
-    /** Translation relative to the node. */
-    translation?: number[];
-    /** Rotation relative to the node. */
-    rotation?: number[];
-    /** Scale relative to the node. */
-    scale?: number[];
-}
+export interface IBoundingVolume extends GLTF2.IBoundingVolume {}
 
 /** @internal */
-export interface IFile extends GLTF2.IProperty, IArrayItem {
-    /** Media type of the referenced file. */
-    mimeType: string;
-    /** URI of the referenced file. */
-    uri?: string;
-    /** Buffer view containing the file. */
-    bufferView?: number;
-    /** Overrides for resources referenced by a glTF file. */
-    aliases?: { alias: string; file: number }[];
-}
+export interface IFile extends GLTF2.IFile, IArrayItem {}
 
 /** @internal */
-export interface IExternalAsset extends GLTF2.IProperty, IArrayItem {
-    /** Index of the referenced file. */
-    file: number;
-}
+export interface IExternalAsset extends GLTF2.IExternalAsset, IArrayItem {}
 
 /**
  * Loader interface with additional members.

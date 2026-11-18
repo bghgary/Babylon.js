@@ -5,7 +5,7 @@ declare module "babylonjs-gltf2interface" {
 }
 
 /**
- * Module for glTF 2.0 Interface
+ * Module for glTF 2.0 and 2.1 interfaces
  */
 declare namespace BABYLON.GLTF2 {
     /**
@@ -29,6 +29,10 @@ declare namespace BABYLON.GLTF2 {
          */
         UNSIGNED_SHORT = 5123,
         /**
+         * Signed 32-bit integer
+         */
+        INT = 5124,
+        /**
          * Unsigned Int
          */
         UNSIGNED_INT = 5125,
@@ -36,6 +40,22 @@ declare namespace BABYLON.GLTF2 {
          * Float
          */
         FLOAT = 5126,
+        /**
+         * Double-precision float
+         */
+        DOUBLE = 5130,
+        /**
+         * Half-precision float
+         */
+        HALF_FLOAT = 5131,
+        /**
+         * Signed 64-bit integer
+         */
+        INT64 = 5134,
+        /**
+         * Unsigned 64-bit integer
+         */
+        UNSIGNED_INT64 = 5135,
     }
 
     /**
@@ -470,12 +490,16 @@ declare namespace BABYLON.GLTF2 {
          * The minimum glTF version that this asset targets
          */
         minVersion?: string;
+        /** The index of the thumbnail image. */
+        thumbnail?: number;
     }
 
     /**
      * A buffer points to binary geometry, animation, or skins
      */
     interface IBuffer extends IChildRootProperty {
+        /** The index of the GLB chunk containing this buffer. */
+        chunk?: number;
         /**
          * The uri of the buffer.  Relative paths are relative to the .gltf file.  Instead of referencing an external file, the uri can also be a data-uri
          */
@@ -658,6 +682,8 @@ declare namespace BABYLON.GLTF2 {
          * The RGB components of the emissive color of the material. These values are linear. If an emissiveTexture is specified, this value is multiplied with the texel values
          */
         emissiveFactor?: number[];
+        /** The multiplier for the material's emissive luminance. */
+        emissiveStrength?: number;
         /**
          * The alpha rendering mode of the material
          */
@@ -720,6 +746,12 @@ declare namespace BABYLON.GLTF2 {
      * A node in the node hierarchy
      */
     interface INode extends IChildRootProperty {
+        /** The node's authored bounding volume. */
+        boundingVolume?: IBoundingVolume;
+        /** The index of an external asset instantiated by this node. */
+        externalAsset?: number;
+        /** Whether the node and its descendants are visible. */
+        visible?: boolean;
         /**
          * The index of the camera referenced by this node
          */
@@ -836,10 +868,82 @@ declare namespace BABYLON.GLTF2 {
         texCoord?: number;
     }
 
+    /** A shape defined by a glTF asset. */
+    interface IShape extends IChildRootProperty {
+        /** The type of shape. */
+        type: string;
+        /** Box dimensions. */
+        box?: IProperty & { size?: number[] };
+        /** Sphere radius. */
+        sphere?: IProperty & { radius?: number };
+        /** Capsule parameters. */
+        capsule?: IProperty & { height?: number; radiusTop?: number; radiusBottom?: number };
+        /** Cylinder parameters. */
+        cylinder?: IProperty & { height?: number; radiusTop?: number; radiusBottom?: number };
+        /** Plane extents. Omitted extents are infinite. */
+        plane?: IProperty & { sizeX?: number; sizeZ?: number };
+        /** Mesh used by a mesh shape. */
+        mesh?: IProperty & { mesh: number };
+        /** Mesh used by a convex mesh shape. */
+        convexMesh?: IProperty & { mesh: number };
+    }
+
+    /** A shape instance used as a node's bounding volume. */
+    interface IBoundingVolume extends IProperty {
+        /** The index of the referenced shape. */
+        shape: number;
+        /** Translation relative to the node. */
+        translation?: number[];
+        /** Rotation relative to the node. */
+        rotation?: number[];
+        /** Scale relative to the node. */
+        scale?: number[];
+    }
+
+    /** A remapping of a referenced external file. */
+    interface IFileAlias extends IProperty {
+        /** The URI to match in the referenced file. */
+        alias: string;
+        /** The index of the replacement file. */
+        file: number;
+    }
+
+    /** A reference to an external or embedded file. */
+    interface IFile extends IChildRootProperty {
+        /** Media type of the referenced file. */
+        mimeType: string;
+        /** URI of the referenced file. */
+        uri?: string;
+        /** Buffer view containing the file. */
+        bufferView?: number;
+        /** Overrides for resources referenced by this file. */
+        aliases?: IFileAlias[];
+    }
+
+    /** An external glTF asset. */
+    interface IExternalAsset extends IChildRootProperty {
+        /** The index of the referenced file. */
+        file: number;
+    }
+
+    /** A JSON pointer associated with a file-unique identifier. */
+    interface IUniqueId extends IProperty {
+        /** A JSON pointer within the asset. */
+        pointer: string;
+    }
+
     /**
      * The root object for a glTF asset
      */
     interface IGLTF extends IProperty {
+        /** Shapes defined by the asset. */
+        shapes?: IShape[];
+        /** Files referenced by the asset. */
+        files?: IFile[];
+        /** External assets that nodes may instantiate. */
+        externalAssets?: IExternalAsset[];
+        /** Case-sensitive identifiers mapping to JSON pointers. */
+        uniqueIds?: Record<string, IUniqueId>;
         /**
          * An array of accessors. An accessor is a typed view into a bufferView
          */
