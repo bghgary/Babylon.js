@@ -1282,9 +1282,6 @@ export class GLTFLoader implements IGLTFLoader {
             assign(babylonTransformNode);
 
             if (node.externalAsset !== undefined) {
-                if (node.mesh !== undefined) {
-                    throw new Error(`${context}: A node cannot contain both a mesh and an external asset`);
-                }
                 promises.push(this._loadExternalAssetAsync(context, node, babylonTransformNode));
             }
         };

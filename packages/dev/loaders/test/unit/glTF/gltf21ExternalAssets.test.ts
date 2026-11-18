@@ -51,6 +51,32 @@ describe("glTF 2.1 external assets", () => {
         expect(instances[0]).not.toBe(instances[1]);
     });
 
+    it("attaches external assets to nodes that also reference meshes", async () => {
+        const inner = { asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: "inner" }] };
+        const data = {
+            json: {
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0, 1] }],
+                nodes: [
+                    { name: "single", mesh: 0, externalAsset: 0 },
+                    { name: "multi", mesh: 1, externalAsset: 0 },
+                ],
+                meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }, { primitives: [{ attributes: { POSITION: 0 } }, { attributes: { POSITION: 0 } }] }],
+                accessors: [{ componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [0, 0, 0] }],
+                externalAssets: [{ file: 0 }],
+                files: [{ mimeType: "model/gltf+json", uri: `data:model/gltf+json;base64,${btoa(JSON.stringify(inner))}` }],
+            },
+        };
+        const container = await new GLTFFileLoader().loadAssetContainerAsync(scene, data, "");
+        const single = container.meshes.find((mesh) => mesh.name === "single")!;
+        const multi = container.transformNodes.find((node) => node.name === "multi")!;
+        expect(single.getChildren().map((node) => node.name)).toEqual(["inner"]);
+        expect(multi.getChildren().map((node) => node.name)).toEqual(["multi_primitive0", "multi_primitive1", "inner"]);
+        expect(container.meshes).toContain(single);
+        expect(container.meshes.filter((mesh) => mesh.name.startsWith("multi_primitive"))).toHaveLength(2);
+    });
+
     it("does not attach a scene when the referenced asset has no default", async () => {
         const inner = { asset: { version: "2.0" }, scenes: [{ nodes: [0] }], nodes: [{ name: "inner" }] };
         const data = {
