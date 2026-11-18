@@ -2976,8 +2976,8 @@ export class GLTFLoader implements IGLTFLoader {
         const file = ArrayItem.Get(`/externalAssets/${asset.index}/file`, this._gltf.files, asset.file);
         const source = this._resolveFileReference(file);
         const sourceFile = source.file;
-        if (file.mimeType !== "model/gltf+json" && file.mimeType !== "model/gltf-binary") {
-            throw new Error(`/files/${file.index}: Unsupported external asset media type '${file.mimeType}'`);
+        if (sourceFile.mimeType !== "model/gltf+json" && sourceFile.mimeType !== "model/gltf-binary") {
+            throw new Error(`/files/${sourceFile.index}: Unsupported external asset media type '${sourceFile.mimeType}'`);
         }
         const identity = sourceFile.uri
             ? sourceFile.uri.startsWith("data:")
@@ -2999,7 +2999,7 @@ export class GLTFLoader implements IGLTFLoader {
         childFileLoader.onCameraLoadedObservable.add((value) => this._parent.onCameraLoadedObservable.notifyObservers(value));
         childFileLoader.onExtensionLoadedObservable.add((value) => this._parent.onExtensionLoadedObservable.notifyObservers(value));
         const data: IGLTFLoaderData =
-            file.mimeType === "model/gltf-binary" ? await childFileLoader._unpackBinaryViewAsync(bytes) : { json: JSON.parse(new TextDecoder().decode(bytes)), bin: null };
+            sourceFile.mimeType === "model/gltf-binary" ? await childFileLoader._unpackBinaryViewAsync(bytes) : { json: JSON.parse(new TextDecoder().decode(bytes)), bin: null };
         const childGltf = data.json as IGLTF;
         const loader = childFileLoader._createNestedLoader(data);
         if (!(loader instanceof GLTFLoader)) {
@@ -3014,8 +3014,11 @@ export class GLTFLoader implements IGLTFLoader {
         loader._externalIdentity = identity;
         loader._externalAncestors = new Set(this._externalAncestors);
         loader._externalAncestors.add(identity);
-        for (const alias of file.aliases ?? []) {
-            loader._uriAliases.set(alias.alias, { loader: this, file: ArrayItem.Get(`/files/${file.index}/aliases`, this._gltf.files, alias.file) });
+        for (const alias of sourceFile.aliases ?? []) {
+            loader._uriAliases.set(alias.alias, {
+                loader: source.loader,
+                file: ArrayItem.Get(`/files/${sourceFile.index}/aliases`, source.loader._gltf.files, alias.file),
+            });
         }
         const childRootUrl =
             sourceFile.uri && !sourceFile.uri.startsWith("data:")

@@ -153,6 +153,60 @@ describe("glTF 2.1 external assets", () => {
         expect((container.textures[0] as Texture).mimeType).toBe("image/webp");
     });
 
+    it("uses the aliased file's media type for a nested external asset", async () => {
+        const leaf = new TextEncoder().encode(
+            JSON.stringify({
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0] }],
+                nodes: [{ name: "leaf", externalAsset: 0 }],
+                externalAssets: [{ file: 0 }],
+                files: [{ mimeType: "model/gltf+json", uri: "final.gltf" }],
+            })
+        );
+        const paddedLength = Math.ceil(leaf.length / 4) * 4;
+        const glb = new Uint8Array(20 + paddedLength);
+        const view = new DataView(glb.buffer);
+        view.setUint32(0, 0x46546c67, true);
+        view.setUint32(4, 2, true);
+        view.setUint32(8, glb.length, true);
+        view.setUint32(12, paddedLength, true);
+        view.setUint32(16, 0x4e4f534a, true);
+        glb.fill(0x20, 20);
+        glb.set(leaf, 20);
+        const inner = {
+            asset: { version: "2.1" },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ externalAsset: 0 }],
+            externalAssets: [{ file: 0 }],
+            files: [{ mimeType: "model/gltf+json", uri: "leaf.gltf" }],
+        };
+        const data = {
+            json: {
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0] }],
+                nodes: [{ externalAsset: 0 }],
+                externalAssets: [{ file: 0 }],
+                files: [
+                    { mimeType: "model/gltf+json", uri: `data:model/gltf+json;base64,${btoa(JSON.stringify(inner))}`, aliases: [{ alias: "leaf.gltf", file: 1 }] },
+                    { mimeType: "model/gltf-binary", bufferView: 0, aliases: [{ alias: "final.gltf", file: 2 }] },
+                    {
+                        mimeType: "model/gltf+json",
+                        uri: `data:model/gltf+json;base64,${btoa(JSON.stringify({ asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: "final" }] }))}`,
+                    },
+                ],
+                bufferViews: [{ buffer: 0, byteLength: glb.length }],
+                buffers: [{ byteLength: glb.length }],
+            },
+            bin: { byteLength: glb.length, readAsync: async (offset: number, length: number) => glb.subarray(offset, offset + length) },
+        };
+        const container = await new GLTFFileLoader().loadAssetContainerAsync(scene, data, "");
+        expect(container.transformNodes.some((node) => node.name === "leaf")).toBe(true);
+        expect(container.transformNodes.some((node) => node.name === "final")).toBe(true);
+    });
+
     it("loads an embedded binary asset from a buffer view", async () => {
         const inner = new TextEncoder().encode(JSON.stringify({ asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: "binary" }] }));
         const length = Math.ceil(inner.length / 4) * 4;
