@@ -1264,7 +1264,7 @@ export class GLTFFileLoader extends GLTFLoaderOptions implements IDisposable, IS
                 throw new Error("Invalid minimum version: " + asset.minVersion);
             }
 
-            if (GLTFFileLoader._compareVersion(minVersion, { major: 2, minor: 0 }) > 0) {
+            if (GLTFFileLoader._compareVersion(minVersion, { major: 2, minor: 1 }) > 0) {
                 throw new Error("Incompatible minimum version: " + asset.minVersion);
             }
         }

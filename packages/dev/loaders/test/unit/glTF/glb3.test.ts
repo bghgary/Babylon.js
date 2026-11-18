@@ -4,6 +4,7 @@ import { NullEngine } from "core/Engines/nullEngine";
 import { type IFileRequest } from "core/Misc/fileRequest";
 import { Observable } from "core/Misc/observable";
 import { WebRequest } from "core/Misc/webRequest";
+import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
 import { Scene } from "core/scene";
 import { GLTFFileLoader, type IGLTFLoaderData } from "loaders/glTF/glTFFileLoader.pure";
 import "loaders/glTF/2.0/glTFLoader";
@@ -88,6 +89,56 @@ describe("GLB version 3", () => {
         const loader = new GLTFFileLoader();
         return (await loader.directLoad(scene, `model/gltf-binary;base64,${Buffer.from(bytes).toString("base64")}`)) as IGLTFLoaderData;
     }
+
+    it("loads a 2.1 asset combining chunk references, quantization, visibility, and external assets", async () => {
+        const data = new Uint8Array(36);
+        new Int8Array(data.buffer, 0, 12).set([-128, 0, 0, 0, 127, 0, 0, 0, 0, 127, 0, 0]);
+        new Float32Array(data.buffer, 12, 6).set([0, 0, 1, 0, 0, 1]);
+        const nested = {
+            asset: { version: "2.1", minVersion: "2.1" },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ name: "nested" }],
+        };
+        const json = {
+            asset: { version: "2.1", minVersion: "2.1" },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ name: "parent", visible: false, mesh: 0, externalAsset: 0 }],
+            externalAssets: [{ file: 0 }],
+            files: [{ uri: `data:model/gltf+json;base64,${Buffer.from(JSON.stringify(nested)).toString("base64")}`, mimeType: "model/gltf+json" }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_1: 1 }, material: 0 }] }],
+            materials: [{ emissiveFactor: [1, 1, 1], emissiveStrength: 3 }],
+            accessors: [
+                { bufferView: 0, componentType: 5120, normalized: true, count: 3, type: "VEC3", min: [-128, 0, 0], max: [127, 127, 0] },
+                { bufferView: 1, componentType: 5126, count: 3, type: "VEC2" },
+            ],
+            bufferViews: [
+                { buffer: 0, byteLength: 12, byteStride: 4 },
+                { buffer: 0, byteOffset: 12, byteLength: 24 },
+            ],
+            buffers: [{ chunk: 0, byteLength: data.length }],
+        };
+        const bytes = glb3([{ type: BIN_CHUNK, bytes: data }, jsonChunk(json)]);
+        const loader = new GLTFFileLoader();
+        const parsed = (await loader.directLoad(scene, `model/gltf-binary;base64,${Buffer.from(bytes).toString("base64")}`)) as IGLTFLoaderData;
+        const container = await loader.loadAssetContainerAsync(scene, parsed, "");
+        const mesh = container.meshes.find((candidate) => candidate.name === "parent")!;
+        const child = container.transformNodes.find((candidate) => candidate.name === "nested")!;
+
+        expect(mesh.isVisible).toBe(false);
+        expect(child.parent).toBe(mesh);
+        expect(child.isVisible).toBe(false);
+        expect(mesh.getBoundingInfo().boundingBox.minimum.x).toBe(-1);
+        expect(Array.from(mesh.getVerticesData(VertexBuffer.UV2Kind)!)).toEqual([0, 0, 1, 0, 0, 1]);
+        expect((mesh.material as PBRMaterial).emissiveIntensity).toBe(3);
+    });
+
+    it("rejects a future minimum version", async () => {
+        const loader = new GLTFFileLoader();
+        const data = { json: { asset: { version: "2.2", minVersion: "2.2" } }, bin: null };
+        await expect(loader.loadAssetContainerAsync(scene, data, "")).rejects.toThrow("Incompatible minimum version: 2.2");
+    });
 
     it("loads buffers from arbitrary chunks around the JSON chunk", async () => {
         const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
