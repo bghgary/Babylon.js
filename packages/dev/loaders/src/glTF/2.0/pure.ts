@@ -7,6 +7,7 @@ export * from "./glTFLoaderInterfaces";
 export * from "./glTFLoaderAnimation.pure";
 export * from "./glTFUniqueIds";
 export * from "./glTFBoundingVolume";
+export * from "./glTFShape";
 export * from "./openpbrMaterialLoadingAdapter";
 export * from "./pbrMaterialLoadingAdapter";
 export * from "./Extensions/pure";
