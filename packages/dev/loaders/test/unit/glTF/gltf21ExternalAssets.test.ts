@@ -6,9 +6,13 @@ import { Observable } from "core/Misc/observable";
 import { Tools } from "core/Misc/tools.pure";
 import { type Texture } from "core/Materials/Textures/texture";
 import { Scene } from "core/scene";
+import { FreeCamera } from "core/Cameras/freeCamera";
+import { Vector3 } from "core/Maths/math.vector.pure";
+import { FlowGraphState } from "core/FlowGraph/flowGraph";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
 import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
+import { GetKHRInteractivityImportResults } from "loaders/glTF/2.0/Extensions/KHR_interactivity";
 import { registerGLTFExtension, unregisterGLTFExtension } from "loaders/glTF/2.0/glTFLoaderExtensionRegistry";
 import "loaders/glTF/2.0/glTFLoader";
 import "loaders/glTF/2.0/Extensions/KHR_lights_punctual";
@@ -49,6 +53,63 @@ describe("glTF 2.1 external assets", () => {
         expect(first.getChildren().map((node) => node.name)).toEqual(["existing", "inner"]);
         expect(second.getChildren().map((node) => node.name)).toEqual(["inner"]);
         expect(instances[0]).not.toBe(instances[1]);
+    });
+
+    it("runs each nested interactivity graph against its own asset instance", async () => {
+        const inner = {
+            asset: { version: "2.0" },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ name: "interactive" }],
+            extensionsUsed: ["KHR_interactivity"],
+            extensions: {
+                KHR_interactivity: {
+                    graphs: [
+                        {
+                            types: [{ signature: "float3" }],
+                            declarations: [{ op: "event/onStart" }, { op: "pointer/set" }],
+                            nodes: [
+                                { declaration: 0, flows: { out: { node: 1 } } },
+                                {
+                                    declaration: 1,
+                                    configuration: { pointer: { value: ["/nodes/0/translation"] }, type: { value: [0] } },
+                                    values: { value: { type: 0, value: [1, 2, 3] } },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        };
+        const data = {
+            json: {
+                asset: { version: "2.1" },
+                scene: 0,
+                scenes: [{ nodes: [0, 1] }],
+                nodes: [
+                    { name: "first", externalAsset: 0 },
+                    { name: "second", externalAsset: 0 },
+                ],
+                externalAssets: [{ file: 0 }],
+                files: [{ mimeType: "model/gltf+json", uri: `data:model/gltf+json;base64,${btoa(JSON.stringify(inner))}` }],
+            },
+        };
+        scene.activeCamera = new FreeCamera("camera", Vector3.Zero(), scene);
+        const loader = new GLTFFileLoader();
+        const complete = loader.whenCompleteAsync();
+        await loader.loadAsync(scene, data, "");
+        await complete;
+        const results = GetKHRInteractivityImportResults(scene);
+        expect(results).toHaveLength(2);
+        expect(results[0].glTF).not.toBe(results[1].glTF);
+        expect(results.map((result) => result.graphs[0].flowGraph?.state)).toEqual([FlowGraphState.Started, FlowGraphState.Started]);
+        scene.render();
+        const instances = scene.transformNodes.filter((node) => node.name === "interactive");
+        expect(instances).toHaveLength(2);
+        expect(instances.map((node) => node.position.asArray())).toEqual([
+            [1, 2, 3],
+            [1, 2, 3],
+        ]);
     });
 
     it("attaches external assets to nodes that also reference meshes", async () => {
