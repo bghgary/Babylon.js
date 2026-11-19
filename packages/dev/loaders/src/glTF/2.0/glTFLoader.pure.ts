@@ -236,6 +236,7 @@ export class GLTFLoader implements IGLTFLoader {
     private _fileName: Nullable<string> = null;
     private _uniqueRootUrl: Nullable<string> = null;
     private _gltf: IGLTF;
+    private _nodeUniqueIds: Map<number, Record<string, string>> | undefined;
     private _bin: Nullable<IDataBuffer> = null;
     private _chunks: readonly IDataBuffer[] = [];
     private _babylonScene: Scene;
@@ -925,6 +926,7 @@ export class GLTFLoader implements IGLTFLoader {
 
     private _loadData(data: IGLTFLoaderData): void {
         this._gltf = data.json as IGLTF;
+        this._nodeUniqueIds = undefined;
         this._setupData();
         this._chunks = data.chunks ?? [];
 
@@ -1225,6 +1227,25 @@ export class GLTFLoader implements IGLTFLoader {
         }
     }
 
+    private _getNodeUniqueIds(nodeIndex: number): Record<string, string> | undefined {
+        if (!this._nodeUniqueIds) {
+            this._nodeUniqueIds = new Map();
+            for (const [id, uniqueId] of Object.entries(this._gltf.uniqueIds ?? {})) {
+                const match = /^\/nodes\/(0|[1-9]\d*)(?=\/|$)/.exec(uniqueId.pointer);
+                if (!match) {
+                    continue;
+                }
+
+                const index = Number(match[1]);
+                const ids = this._nodeUniqueIds.get(index) ?? Object.create(null);
+                ids[id] = uniqueId.pointer.substring(match[0].length);
+                this._nodeUniqueIds.set(index, ids);
+            }
+        }
+
+        return this._nodeUniqueIds.get(nodeIndex);
+    }
+
     /**
      * Loads a glTF node.
      * @param context The context when loading the asset
@@ -1232,7 +1253,6 @@ export class GLTFLoader implements IGLTFLoader {
      * @param assign A function called synchronously after parsing the glTF properties
      * @returns A promise that resolves with the loaded Babylon mesh when the load is complete
      */
-
     public loadNodeAsync(context: string, node: INode, assign: (babylonTransformNode: TransformNode) => void = () => {}): Promise<TransformNode> {
         const extensionPromise = this._extensionsLoadNodeAsync(context, node, assign);
         if (extensionPromise) {
@@ -1250,6 +1270,13 @@ export class GLTFLoader implements IGLTFLoader {
         const loadNode = (babylonTransformNode: TransformNode) => {
             GLTFLoader.AddPointerMetadata(babylonTransformNode, context);
             GLTFLoader._LoadTransform(node, babylonTransformNode);
+
+            const uniqueIds = this._getNodeUniqueIds(node.index);
+            if (uniqueIds) {
+                const metadata = (babylonTransformNode._internalMetadata ??= {});
+                const gltfMetadata = (metadata.gltf ??= {});
+                gltfMetadata.uniqueIds = uniqueIds;
+            }
 
             if (node.boundingVolume) {
                 const shape = ArrayItem.Get(`${context}/boundingVolume/shape`, this._gltf.shapes, node.boundingVolume.shape);

@@ -168,6 +168,13 @@ export interface IExportOptions {
     uniqueIds?(context: IGLTFUniqueIdExportContext): Readonly<Record<string, string>>;
 
     /**
+     * Preserves unique IDs from loaded glTF nodes when their target values are also exported.
+     * IDs may point to a node or to a property within that node. Export fails if a target is missing.
+     * Requires glTF 2.1.
+     */
+    preserveNodeUniqueIds?: boolean;
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)

@@ -453,6 +453,7 @@ export class GLTFExporter {
             removeNoopRootNodes: true,
             includeCoordinateSystemConversionNodes: false,
             meshCompressionMethod: "None",
+            preserveNodeUniqueIds: false,
             khrInteractivity: undefined,
             ...options,
             gltfVersion: options?.gltfVersion === undefined ? "2.0" : options.gltfVersion,
@@ -474,7 +475,7 @@ export class GLTFExporter {
         if (this._options.nodeBoundingVolume && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting a bounding volume requires glTF 2.1.");
         }
-        if (this._options.uniqueIds && this._options.gltfVersion !== "2.1") {
+        if ((this._options.uniqueIds || this._options.preserveNodeUniqueIds) && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting unique IDs requires glTF 2.1.");
         }
         if (this._options.thumbnail) {
@@ -595,12 +596,34 @@ export class GLTFExporter {
             buffer.uri = fileName + ".bin";
         }
 
-        if (this._options.uniqueIds) {
+        if (this._options.uniqueIds || this._options.preserveNodeUniqueIds) {
             const gltf: IGLTF = JSON.parse(JSON.stringify(this._glTF));
-            const ids = this._options.uniqueIds({ gltf: JSON.parse(JSON.stringify(gltf)), getNodeIndex: (node) => this._getNodeIndex(node) });
-            if (!ids || typeof ids !== "object" || Array.isArray(ids)) {
-                throw new Error("Invalid glTF unique IDs");
+            const ids: Record<string, string> = Object.create(null);
+            if (this._options.preserveNodeUniqueIds) {
+                for (const [node, nodeIndex] of this._nodeMap) {
+                    const importedIds: Record<string, string> | undefined = node._internalMetadata?.gltf?.uniqueIds;
+                    for (const [id, pointerSuffix] of Object.entries(importedIds ?? {})) {
+                        if (Object.prototype.hasOwnProperty.call(ids, id)) {
+                            throw new Error(`Duplicate glTF unique ID '${id}'`);
+                        }
+                        ids[id] = `/nodes/${nodeIndex}${pointerSuffix}`;
+                    }
+                }
             }
+
+            if (this._options.uniqueIds) {
+                const customIds = this._options.uniqueIds({ gltf: JSON.parse(JSON.stringify(gltf)), getNodeIndex: (node) => this._getNodeIndex(node) });
+                if (!customIds || typeof customIds !== "object" || Array.isArray(customIds)) {
+                    throw new Error("Invalid glTF unique IDs");
+                }
+                for (const [id, pointer] of Object.entries(customIds)) {
+                    if (Object.prototype.hasOwnProperty.call(ids, id)) {
+                        throw new Error(`Duplicate glTF unique ID '${id}'`);
+                    }
+                    ids[id] = pointer;
+                }
+            }
+
             const result: NonNullable<IGLTF["uniqueIds"]> = Object.create(null);
             for (const [id, pointer] of Object.entries(ids)) {
                 if (!id || /["#*,.:|?@<>{}\[\]\/\\%\p{Cc}]/u.test(id)) {
@@ -982,7 +1005,12 @@ export class GLTFExporter {
         const rootNodesLH = new Array<Node>();
         const rootNoopNodesRH = new Array<Node>();
         const removeNoopRootNodes =
-            this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility && !this._options.nodeBoundingVolume && !this._options.uniqueIds;
+            this._options.removeNoopRootNodes &&
+            !this._options.khrInteractivity &&
+            !this._options.nodeVisibility &&
+            !this._options.nodeBoundingVolume &&
+            !this._options.uniqueIds &&
+            !this._options.preserveNodeUniqueIds;
 
         if (this._options.nodeVisibility || this._options.nodeBoundingVolume) {
             const sceneNodes = this._babylonScene.getNodes();
@@ -1626,6 +1654,7 @@ export class GLTFExporter {
                     !this._options.nodeVisibility &&
                     !this._options.nodeBoundingVolume &&
                     !this._options.uniqueIds &&
+                    !this._options.preserveNodeUniqueIds &&
                     parentBabylonNode !== null &&
                     IsChildCollapsible(babylonNode, parentBabylonNode)
                 ) {

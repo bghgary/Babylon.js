@@ -144,6 +144,7 @@ export class EXT_lights_area implements IGLTFExporterExtensionV2 {
                 !this._exporter.options.nodeVisibility &&
                 !this._exporter.options.nodeBoundingVolume &&
                 !this._exporter.options.uniqueIds &&
+                !this._exporter.options.preserveNodeUniqueIds &&
                 parentBabylonNode &&
                 IsChildCollapsible(areaLight, parentBabylonNode)
             ) {

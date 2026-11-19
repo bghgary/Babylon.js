@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NullEngine } from "core/Engines/nullEngine";
 import { Scene } from "core/scene";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
-import { GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
+import { GetGLTFNodeUniqueIds, GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
 import "loaders/glTF/2.0/glTFLoader";
 
 describe("glTF 2.1 unique IDs", () => {
@@ -43,6 +43,38 @@ describe("glTF 2.1 unique IDs", () => {
         try {
             await loader.loadAsync(scene, { json: { asset: { version: "2.1" }, nodes: [node], uniqueIds: { "stable-id": { pointer: "/nodes/0" } } }, bin: null }, "");
             expect(target).toBe(node);
+        } finally {
+            scene.dispose();
+            engine.dispose();
+        }
+    });
+
+    it("associates node-targeting IDs with the loaded Babylon node", async () => {
+        const engine = new NullEngine();
+        const scene = new Scene(engine);
+        const loader = new GLTFFileLoader();
+        try {
+            await loader.loadAsync(
+                scene,
+                {
+                    json: {
+                        asset: { version: "2.1" },
+                        scene: 0,
+                        scenes: [{ nodes: [0] }],
+                        nodes: [{ name: "target" }],
+                        uniqueIds: {
+                            node: { pointer: "/nodes/0" },
+                            name: { pointer: "/nodes/0/name" },
+                            missing: { pointer: "/nodes/0/extras/missing" },
+                            ["__proto__"]: { pointer: "/nodes/0" },
+                            asset: { pointer: "/asset" },
+                        },
+                    },
+                    bin: null,
+                },
+                ""
+            );
+            expect(GetGLTFNodeUniqueIds(scene.transformNodes[0])).toEqual({ node: "", name: "/name", missing: "/extras/missing", ["__proto__"]: "" });
         } finally {
             scene.dispose();
             engine.dispose();

@@ -1,3 +1,17 @@
+import { type Node } from "core/node";
+
+type GLTFNodeUniqueIds = Record<string, string>;
+
+/**
+ * Returns unique IDs from the loaded glTF document that point into this node.
+ * The values are JSON Pointer suffixes relative to `/nodes/<index>`.
+ * @param node The loaded Babylon node
+ * @returns Unique IDs and their pointer suffixes, or an empty object
+ */
+export function GetGLTFNodeUniqueIds(node: Node): Readonly<GLTFNodeUniqueIds> {
+    return node._internalMetadata?.gltf?.uniqueIds ?? {};
+}
+
 /**
  * Resolves a glTF 2.1 unique ID to the JSON value it identifies.
  * The JSON object can be obtained from GLTFFileLoader.onParsedObservable.

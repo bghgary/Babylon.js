@@ -19,7 +19,7 @@ import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF as IRuntimeGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
 import { GetGLTFNodeVisibility, GetGLTFVisibilityAnimationTarget } from "loaders/glTF/2.0/glTFLoaderVisibility";
 import { GetGLTFBoundingVolume } from "loaders/glTF/2.0/glTFBoundingVolume";
-import { GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
+import { GetGLTFNodeUniqueIds, GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
 import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
 import "loaders/glTF/2.0/Extensions/KHR_animation_pointer";
 import "loaders/glTF/2.0/Extensions/KHR_animation_pointer.data";
@@ -698,6 +698,33 @@ describe("glTF exporter", () => {
             expect(GetGLTFValueByUniqueId(gltf, "target")).toEqual(expect.objectContaining({ name: "identified" }));
             expect(GetGLTFValueByUniqueId(gltf, "value")).toBe(7);
             expect(GetGLTFValueByUniqueId(gltf, "__proto__")).toEqual(gltf.asset);
+        });
+
+        it("preserves imported node unique IDs when requested", async () => {
+            const source = CreateTriangleGltf();
+            source.asset.version = "2.1";
+            source.uniqueIds = {
+                triangle: { pointer: "/nodes/0" },
+                triangleName: { pointer: "/nodes/0/name" },
+            };
+            await ImportGltfAsync(testScene.scene, source);
+
+            const importedNode = testScene.scene.meshes.find((mesh) => mesh.name === "triangle")!;
+            expect(GetGLTFNodeUniqueIds(importedNode)).toEqual({ triangle: "", triangleName: "/name" });
+
+            const gltf = await ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", preserveNodeUniqueIds: true });
+
+            expect(GetGLTFValueByUniqueId(gltf, "triangle")).toEqual(expect.objectContaining({ name: "triangle" }));
+            expect(GetGLTFValueByUniqueId(gltf, "triangleName")).toBe("triangle");
+        });
+
+        it("rejects preserved node IDs whose target fields were not exported", async () => {
+            const source = CreateTriangleGltf();
+            source.asset.version = "2.1";
+            source.uniqueIds = { missing: { pointer: "/nodes/0/extras/missing" } };
+            await ImportGltfAsync(testScene.scene, source);
+
+            await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", preserveNodeUniqueIds: true })).rejects.toThrow(/unique id 'missing' points to a missing value/i);
         });
 
         it("rejects invalid unique IDs and unresolved pointers", async () => {
