@@ -19,6 +19,7 @@ import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF as IRuntimeGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
 import { GetGLTFNodeVisibility } from "loaders/glTF/2.0/glTFLoaderVisibility";
 import { GetGLTFBoundingVolume } from "loaders/glTF/2.0/glTFBoundingVolume";
+import { GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
 import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
 import {
     CreateTestScene,
@@ -596,6 +597,51 @@ describe("glTF exporter", () => {
                     nodeBoundingVolume: () => ({ shape: { type: "sphere" }, translation: new Vector3(Infinity, 0, 0) }),
                 })
             ).rejects.toThrow(/invalid bounding volume transform/i);
+        });
+
+        it("exports unique IDs against final node indices and JSON pointers", async () => {
+            const node = new TransformNode("identified", testScene.scene);
+            node.metadata = { gltf: { extras: { "a/b": { "~name": 7 } } } };
+            const gltf = await ExportGltfAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                uniqueIds: ({ getNodeIndex }) => {
+                    const index = getNodeIndex(node);
+                    return { target: `/nodes/${index}`, value: `/nodes/${index}/extras/a~1b/~0name`, ["__proto__"]: "/asset" };
+                },
+            });
+            expect(GetGLTFValueByUniqueId(gltf, "target")).toEqual(expect.objectContaining({ name: "identified" }));
+            expect(GetGLTFValueByUniqueId(gltf, "value")).toBe(7);
+            expect(GetGLTFValueByUniqueId(gltf, "__proto__")).toEqual(gltf.asset);
+        });
+
+        it("rejects invalid unique IDs and unresolved pointers", async () => {
+            new TransformNode("node", testScene.scene);
+            for (const uniqueIds of [
+                { "bad.id": "/asset" },
+                { target: "/nodes/999" },
+                { target: "/uniqueIds/target" },
+                { target: "/asset/missing" },
+                { target: "/asset/~2" },
+                { target: "/nodes/00" },
+                { "bad\u0085id": "/asset" },
+            ]) {
+                await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", uniqueIds: () => uniqueIds })).rejects.toThrow(/unique id/i);
+            }
+            await expect(ExportGltfAsync(testScene.scene, { uniqueIds: () => ({}) })).rejects.toThrow(/unique id.*2.1/i);
+        });
+
+        it("validates pointers against the exported document rather than a modified callback snapshot", async () => {
+            new TransformNode("node", testScene.scene);
+            await expect(
+                ExportGltfAsync(testScene.scene, {
+                    gltfVersion: "2.1",
+                    uniqueIds: ({ gltf }) => {
+                        gltf.asset.generator = "changed";
+                        (gltf.asset as { invented?: string }).invented = "not exported";
+                        return { target: "/asset/invented" };
+                    },
+                })
+            ).rejects.toThrow(/unique id.*missing/i);
         });
     });
 

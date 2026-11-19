@@ -250,8 +250,8 @@ export class GLTFExporter {
      */
     private _animationSampleRate: number;
 
-    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume">> &
-        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume">;
+    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds">> &
+        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds">;
 
     public _shouldUseGlb: boolean = false;
 
@@ -469,6 +469,9 @@ export class GLTFExporter {
         if (this._options.nodeBoundingVolume && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting a bounding volume requires glTF 2.1.");
         }
+        if (this._options.uniqueIds && this._options.gltfVersion !== "2.1") {
+            throw new Error("Exporting unique IDs requires glTF 2.1.");
+        }
         if (this._options.thumbnail) {
             if (this._options.gltfVersion !== "2.1") {
                 throw new Error("Exporting a thumbnail requires glTF 2.1.");
@@ -585,6 +588,40 @@ export class GLTFExporter {
 
         if (!this._shouldUseGlb) {
             buffer.uri = fileName + ".bin";
+        }
+
+        if (this._options.uniqueIds) {
+            const gltf: IGLTF = JSON.parse(JSON.stringify(this._glTF));
+            const ids = this._options.uniqueIds({ gltf: JSON.parse(JSON.stringify(gltf)), getNodeIndex: (node) => this._getNodeIndex(node) });
+            if (!ids || typeof ids !== "object" || Array.isArray(ids)) {
+                throw new Error("Invalid glTF unique IDs");
+            }
+            const result: NonNullable<IGLTF["uniqueIds"]> = Object.create(null);
+            for (const [id, pointer] of Object.entries(ids)) {
+                if (!id || /["#*,.:|?@<>{}\[\]\/\\%\p{Cc}]/u.test(id)) {
+                    throw new Error(`Invalid glTF unique ID '${id}'`);
+                }
+                if (typeof pointer !== "string" || !pointer.startsWith("/") || pointer === "/uniqueIds" || pointer.startsWith("/uniqueIds/") || /~(?![01])/.test(pointer)) {
+                    throw new Error(`Invalid pointer for glTF unique ID '${id}'`);
+                }
+                let value: unknown = gltf;
+                for (const rawSegment of pointer.substring(1).split("/")) {
+                    const segment = rawSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+                    if (
+                        value === null ||
+                        typeof value !== "object" ||
+                        (Array.isArray(value) && !/^(0|[1-9]\d*)$/.test(segment)) ||
+                        !Object.prototype.hasOwnProperty.call(value, segment)
+                    ) {
+                        throw new Error(`glTF unique ID '${id}' points to a missing value`);
+                    }
+                    value = (value as Record<string, unknown>)[segment];
+                }
+                result[id] = { pointer };
+            }
+            if (Object.keys(result).length) {
+                this._glTF.uniqueIds = result;
+            }
         }
 
         return prettyPrint ? JSON.stringify(this._glTF, null, 2) : JSON.stringify(this._glTF);
@@ -939,7 +976,8 @@ export class GLTFExporter {
         const rootNodesRH = new Array<Node>();
         const rootNodesLH = new Array<Node>();
         const rootNoopNodesRH = new Array<Node>();
-        const removeNoopRootNodes = this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility && !this._options.nodeBoundingVolume;
+        const removeNoopRootNodes =
+            this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility && !this._options.nodeBoundingVolume && !this._options.uniqueIds;
 
         if (this._options.nodeVisibility || this._options.nodeBoundingVolume) {
             const sceneNodes = this._babylonScene.getNodes();
@@ -1567,7 +1605,13 @@ export class GLTFExporter {
 
                 // If a parent node exists and can be collapsed, merge their transformations and mark the parent as the camera-containing node.
                 const parentBabylonNode = babylonNode.parent;
-                if (!this._options.nodeVisibility && !this._options.nodeBoundingVolume && parentBabylonNode !== null && IsChildCollapsible(babylonNode, parentBabylonNode)) {
+                if (
+                    !this._options.nodeVisibility &&
+                    !this._options.nodeBoundingVolume &&
+                    !this._options.uniqueIds &&
+                    parentBabylonNode !== null &&
+                    IsChildCollapsible(babylonNode, parentBabylonNode)
+                ) {
                     const parentNodeIndex = this._nodeMap.get(parentBabylonNode);
                     if (parentNodeIndex !== undefined) {
                         const parentNode = this._nodes[parentNodeIndex];

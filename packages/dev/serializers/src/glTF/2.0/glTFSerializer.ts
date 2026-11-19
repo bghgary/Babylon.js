@@ -4,7 +4,7 @@ import { type Animation } from "core/Animations/animation";
 import { type AnimationGroup } from "core/Animations/animationGroup";
 import { type Camera } from "core/Cameras/camera";
 import { type Material } from "core/Materials/material";
-import { type IKHRInteractivity, type IShape } from "babylonjs-gltf2interface";
+import { type IGLTF, type IKHRInteractivity, type IShape } from "babylonjs-gltf2interface";
 import { type Quaternion, type Vector3 } from "core/Maths/math.vector";
 import { type GLTFData } from "./glTFData";
 import { GLTFExporter } from "./glTFExporter";
@@ -98,6 +98,18 @@ export interface IGLTFBoundingVolumeExport {
     scale?: Vector3;
 }
 
+/** Final indices and document available when assigning glTF unique IDs. */
+export interface IGLTFUniqueIdExportContext {
+    /** The exported document before unique IDs are added. */
+    readonly gltf: Readonly<IGLTF>;
+    /**
+     * Gets the exported index of a Babylon node.
+     * @param node source Babylon node
+     * @returns final node index, or undefined if the node was not exported
+     */
+    getNodeIndex(node: Node): number | undefined;
+}
+
 /**
  * Holds a collection of exporter options and parameters
  */
@@ -138,6 +150,14 @@ export interface IExportOptions {
     nodeBoundingVolume?(node: Node): IGLTFBoundingVolumeExport | undefined;
 
     /**
+     * Supplies unique IDs and their JSON pointers after export indices are assigned.
+     * Requires glTF 2.1.
+     * @param context final exported document and node indices
+     * @returns a map from IDs to JSON pointers
+     */
+    uniqueIds?(context: IGLTFUniqueIdExportContext): Readonly<Record<string, string>>;
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)
@@ -176,7 +196,7 @@ export interface IExportOptions {
 
     /**
      * Remove no-op root nodes when possible. Defaults to true. No-op roots are preserved when
-     * {@link khrInteractivity}, {@link nodeVisibility}, or {@link nodeBoundingVolume} is provided.
+     * {@link khrInteractivity}, {@link nodeVisibility}, {@link nodeBoundingVolume}, or {@link uniqueIds} is provided.
      */
     removeNoopRootNodes?: boolean;
 
