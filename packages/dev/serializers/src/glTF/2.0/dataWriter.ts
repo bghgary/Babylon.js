@@ -79,6 +79,14 @@ export class DataWriter {
         this._byteOffset += 4;
     }
 
+    public writeUInt64(value: number): void {
+        if (!Number.isSafeInteger(value) || value < 0) {
+            throw new Error(`Invalid 64-bit unsigned integer: ${value}`);
+        }
+        this.writeUInt32(value % 0x100000000);
+        this.writeUInt32(Math.floor(value / 0x100000000));
+    }
+
     public writeFloat32(value: number): void {
         this._checkGrowBuffer(4);
         this._dataView.setFloat32(this._byteOffset, value, true);

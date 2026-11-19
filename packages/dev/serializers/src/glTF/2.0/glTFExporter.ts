@@ -449,10 +449,14 @@ export class GLTFExporter {
             khrInteractivity: undefined,
             ...options,
             gltfVersion: options?.gltfVersion === undefined ? "2.0" : options.gltfVersion,
+            glbVersion: options?.glbVersion === undefined ? 2 : options.glbVersion,
         };
 
         if (this._options.gltfVersion !== "2.0" && this._options.gltfVersion !== "2.1") {
             throw new Error(`Unsupported glTF export version: ${this._options.gltfVersion}`);
+        }
+        if (this._options.glbVersion !== 2 && this._options.glbVersion !== 3) {
+            throw new Error(`Unsupported binary glTF container version: ${this._options.glbVersion}`);
         }
         if (this._options.gltfVersion === "2.1") {
             this._glTF.asset.version = "2.1";
@@ -517,6 +521,9 @@ export class GLTFExporter {
         const buffer: IBuffer = { byteLength: bufferByteLength };
 
         if (buffer.byteLength) {
+            if (this._shouldUseGlb && this._options.glbVersion === 3 && this._options.gltfVersion === "2.1") {
+                buffer.chunk = 1;
+            }
             this._glTF.buffers = [buffer];
         }
         if (this._nodes && this._nodes.length) {
@@ -595,13 +602,14 @@ export class GLTFExporter {
     }
 
     /**
-     * Pads the number to a multiple of 4
+     * Pads the number to a multiple of the alignment
      * @param num number to pad
+     * @param alignment required alignment
      * @returns padded number
      */
-    private _getPadding(num: number): number {
-        const remainder = num % 4;
-        const padding = remainder === 0 ? remainder : 4 - remainder;
+    private _getPadding(num: number, alignment = 4): number {
+        const remainder = num % alignment;
+        const padding = remainder === 0 ? remainder : alignment - remainder;
 
         return padding;
     }
@@ -613,8 +621,9 @@ export class GLTFExporter {
         const jsonText = this._generateJSON(binaryBuffer.byteLength);
 
         const glbFileName = glTFPrefix + ".glb";
-        const headerLength = 12;
-        const chunkLengthPrefix = 8;
+        const glb3 = this._options.glbVersion === 3;
+        const headerLength = glb3 ? 16 : 12;
+        const chunkLengthPrefix = glb3 ? 16 : 8;
         let jsonLength = jsonText.length;
         let encodedJsonText;
         // Make use of TextEncoder when available
@@ -623,8 +632,8 @@ export class GLTFExporter {
             encodedJsonText = encoder.encode(jsonText);
             jsonLength = encodedJsonText.length;
         }
-        const jsonPadding = this._getPadding(jsonLength);
-        const binPadding = this._getPadding(binaryBuffer.byteLength);
+        const jsonPadding = this._getPadding(jsonLength, glb3 ? 8 : 4);
+        const binPadding = glb3 ? 0 : this._getPadding(binaryBuffer.byteLength);
 
         const byteLength = headerLength + 2 * chunkLengthPrefix + jsonLength + jsonPadding + binaryBuffer.byteLength + binPadding;
 
@@ -632,12 +641,21 @@ export class GLTFExporter {
 
         // Header
         dataWriter.writeUInt32(0x46546c67); // "glTF"
-        dataWriter.writeUInt32(2); // Version
-        dataWriter.writeUInt32(byteLength); // Total bytes in file
+        dataWriter.writeUInt32(this._options.glbVersion); // Version
+        if (glb3) {
+            dataWriter.writeUInt64(byteLength);
+        } else {
+            dataWriter.writeUInt32(byteLength);
+        }
 
-        // JSON chunk length prefix
-        dataWriter.writeUInt32(jsonLength + jsonPadding);
-        dataWriter.writeUInt32(0x4e4f534a); // "JSON"
+        if (glb3) {
+            dataWriter.writeUInt32(0x4e4f534a); // "JSON"
+            dataWriter.writeUInt32(0); // Plain encoding
+            dataWriter.writeUInt64(jsonLength);
+        } else {
+            dataWriter.writeUInt32(jsonLength + jsonPadding);
+            dataWriter.writeUInt32(0x4e4f534a); // "JSON"
+        }
 
         // JSON chunk bytes
         if (encodedJsonText) {
@@ -658,12 +676,17 @@ export class GLTFExporter {
 
         // JSON padding
         for (let i = 0; i < jsonPadding; ++i) {
-            dataWriter.writeUInt8(0x20);
+            dataWriter.writeUInt8(glb3 ? 0 : 0x20);
         }
 
-        // Binary chunk length prefix
-        dataWriter.writeUInt32(binaryBuffer.byteLength + binPadding);
-        dataWriter.writeUInt32(0x004e4942); // "BIN"
+        if (glb3) {
+            dataWriter.writeUInt32(0x004e4942); // "BIN"
+            dataWriter.writeUInt32(0); // Plain encoding
+            dataWriter.writeUInt64(binaryBuffer.byteLength);
+        } else {
+            dataWriter.writeUInt32(binaryBuffer.byteLength + binPadding);
+            dataWriter.writeUInt32(0x004e4942); // "BIN"
+        }
 
         // Binary chunk bytes
         dataWriter.writeTypedArray(binaryBuffer);

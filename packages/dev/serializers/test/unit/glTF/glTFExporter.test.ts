@@ -7,8 +7,10 @@ import { SubMesh } from "core/Meshes/subMesh";
 import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
 import { Material } from "core/Materials/material";
 import { MultiMaterial } from "core/Materials/multiMaterial";
+import { ImportMeshAsync } from "core/Loading";
 import { type IAccessor, type ICamera } from "babylonjs-gltf2interface";
 import { GLTF2Export } from "serializers/glTF/2.0";
+import { DataWriter } from "serializers/glTF/2.0/dataWriter";
 import {
     CreateTestScene,
     CreateTriangleGltf,
@@ -62,6 +64,8 @@ describe("glTF exporter", () => {
         it("rejects unsupported export versions", async () => {
             // @ts-expect-error Unsupported versions can be supplied by JavaScript callers.
             await expect(GLTF2Export.GLTFAsync(testScene.scene, "model", { gltfVersion: "3.0" })).rejects.toThrow("Unsupported glTF export version: 3.0");
+            // @ts-expect-error Unsupported versions can be supplied by JavaScript callers.
+            await expect(GLTF2Export.GLBAsync(testScene.scene, "model", { glbVersion: 4 })).rejects.toThrow("Unsupported binary glTF container version: 4");
         });
 
         it("writes glTF 2.1 in a binary container", async () => {
@@ -73,6 +77,79 @@ describe("glTF exporter", () => {
 
             expect(glb.getUint32(4, true)).toBe(2);
             expect(gltf.asset).toMatchObject({ version: "2.1", minVersion: "2.1" });
+        });
+
+        it("writes and loads a version 3 binary container", async () => {
+            CreateBox("box-é", {}, testScene.scene);
+            const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { gltfVersion: "2.1", glbVersion: 3, exportWithoutWaitingForScene: true });
+            const bytes = new Uint8Array(await GetBlobFile(data.files["model.glb"]).arrayBuffer());
+            const glb = new DataView(bytes.buffer);
+
+            expect(glb.getUint32(0, true)).toBe(0x46546c67);
+            expect(glb.getUint32(4, true)).toBe(3);
+            expect(glb.getBigUint64(8, true)).toBe(BigInt(bytes.length));
+            expect(glb.getUint32(16, true)).toBe(0x4e4f534a);
+            expect(glb.getUint32(20, true)).toBe(0);
+            const jsonLength = Number(glb.getBigUint64(24, true));
+            const jsonEnd = 32 + jsonLength;
+            expect(jsonEnd % 8).not.toBe(0);
+            const gltf = ParseGltfJson(new TextDecoder().decode(bytes.subarray(32, jsonEnd)));
+            expect(gltf.asset).toMatchObject({ version: "2.1", minVersion: "2.1" });
+            expect(gltf.nodes.some((node) => node.name === "box-é")).toBe(true);
+            expect(gltf.buffers[0].chunk).toBe(1);
+
+            const binHeader = Math.ceil(jsonEnd / 8) * 8;
+            expect(Array.from(bytes.subarray(jsonEnd, binHeader)).every((byte) => byte === 0)).toBe(true);
+            expect(glb.getUint32(binHeader, true)).toBe(0x004e4942);
+            expect(glb.getUint32(binHeader + 4, true)).toBe(0);
+            expect(Number(glb.getBigUint64(binHeader + 8, true))).toBe(gltf.buffers[0].byteLength);
+            expect(binHeader + 16 + gltf.buffers[0].byteLength).toBe(bytes.length);
+
+            const imported = CreateTestScene();
+            try {
+                const result = await ImportMeshAsync(bytes, imported.scene, { pluginExtension: ".glb" });
+                expect(result.meshes.some((mesh) => mesh.name === "box-é" && mesh.getTotalVertices() > 0)).toBe(true);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("writes a version 3 container for a glTF 2.0 asset without a chunk property", async () => {
+            CreateBox("box", {}, testScene.scene);
+            const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { glbVersion: 3, exportWithoutWaitingForScene: true });
+            const bytes = new Uint8Array(await GetBlobFile(data.files["model.glb"]).arrayBuffer());
+            const glb = new DataView(bytes.buffer);
+            const jsonLength = Number(glb.getBigUint64(24, true));
+            const gltf = ParseGltfJson(new TextDecoder().decode(bytes.subarray(32, 32 + jsonLength)));
+
+            expect(gltf.asset.version).toBe("2.0");
+            expect(gltf.buffers[0].chunk).toBeUndefined();
+            const imported = CreateTestScene();
+            try {
+                const result = await ImportMeshAsync(bytes, imported.scene, { pluginExtension: ".glb" });
+                expect(result.meshes.some((mesh) => mesh.name === "box" && mesh.getTotalVertices() > 0)).toBe(true);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("writes version 3 containers without buffer data", async () => {
+            const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { gltfVersion: "2.1", glbVersion: 3, exportWithoutWaitingForScene: true });
+            const bytes = new Uint8Array(await GetBlobFile(data.files["model.glb"]).arrayBuffer());
+            const glb = new DataView(bytes.buffer);
+            const jsonEnd = 32 + Number(glb.getBigUint64(24, true));
+            const gltf = ParseGltfJson(new TextDecoder().decode(bytes.subarray(32, jsonEnd)));
+            const binHeader = Math.ceil(jsonEnd / 8) * 8;
+            expect(gltf.buffers).toBeUndefined();
+            expect(glb.getBigUint64(binHeader + 8, true)).toBe(0n);
+            expect(binHeader + 16).toBe(bytes.length);
+        });
+
+        it("writes safe 64-bit lengths in little-endian order", () => {
+            const writer = new DataWriter(8);
+            writer.writeUInt64(0x100000005);
+            expect(Array.from(writer.getOutputData())).toEqual([5, 0, 0, 0, 1, 0, 0, 0]);
+            expect(() => writer.writeUInt64(Number.MAX_SAFE_INTEGER + 1)).toThrow();
         });
 
         it("writes a binary glTF with a JSON chunk followed by a BIN chunk", async () => {
