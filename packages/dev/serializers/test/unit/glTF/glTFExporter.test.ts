@@ -13,6 +13,7 @@ import { MultiMaterial } from "core/Materials/multiMaterial";
 import { ImportMeshAsync } from "core/Loading";
 import { type IAccessor, type ICamera, type IAnimationChannel } from "babylonjs-gltf2interface";
 import { GLTF2Export } from "serializers/glTF/2.0";
+import { GLTFExporter } from "serializers/glTF/2.0/glTFExporter";
 import { DataWriter } from "serializers/glTF/2.0/dataWriter";
 import { GLTFLoader } from "loaders/glTF/2.0/glTFLoader.pure";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
@@ -149,6 +150,37 @@ describe("glTF exporter", () => {
             } finally {
                 imported.dispose();
             }
+        });
+
+        it("writes additional version 3 chunks and buffer references", async () => {
+            const exporter = new GLTFExporter(testScene.scene, { gltfVersion: "2.1", glbVersion: 3, exportWithoutWaitingForScene: true });
+            const customChunkIndex = exporter.addGLBChunk(new Uint8Array([4, 5, 6]), 0x4f4f4646, 0x12345678);
+            const bufferIndex = exporter.addGLBBufferChunk(new Uint8Array([7, 8, 9]));
+            const data = await exporter.generateGLBAsync("model");
+            const bytes = new Uint8Array(await GetBlobFile(data.files["model.glb"]).arrayBuffer());
+            const view = new DataView(bytes.buffer);
+            const jsonEnd = 32 + Number(view.getBigUint64(24, true));
+            const gltf = ParseGltfJson(new TextDecoder().decode(bytes.subarray(32, jsonEnd)));
+
+            expect(customChunkIndex).toBe(2);
+            expect(bufferIndex).toBe(1);
+            expect(gltf.buffers[0].chunk).toBe(1);
+            expect(gltf.buffers[1]).toMatchObject({ byteLength: 3, chunk: 3 });
+
+            let chunkOffset = Math.ceil(jsonEnd / 8) * 8;
+            const primaryChunkEnd = chunkOffset + 16 + gltf.buffers[0].byteLength;
+            chunkOffset = Math.ceil(primaryChunkEnd / 8) * 8;
+            expect(chunkOffset % 8).toBe(0);
+            expect(view.getUint32(chunkOffset, true)).toBe(0x4f4f4646);
+            expect(view.getUint32(chunkOffset + 4, true)).toBe(0x12345678);
+            expect(view.getBigUint64(chunkOffset + 8, true)).toBe(3n);
+            expect(Array.from(bytes.subarray(chunkOffset + 16, chunkOffset + 19))).toEqual([4, 5, 6]);
+
+            chunkOffset = Math.ceil((chunkOffset + 16 + 3) / 8) * 8;
+            expect(chunkOffset % 8).toBe(0);
+            expect(view.getUint32(chunkOffset, true)).toBe(0x004e4942);
+            expect(view.getBigUint64(chunkOffset + 8, true)).toBe(3n);
+            expect(Array.from(bytes.subarray(chunkOffset + 16))).toEqual([7, 8, 9]);
         });
 
         it("writes a version 3 container for a glTF 2.0 asset without a chunk property", async () => {

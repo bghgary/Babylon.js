@@ -257,6 +257,9 @@ export class GLTFExporter {
 
     public _shouldUseGlb: boolean = false;
 
+    private readonly _additionalGLBChunks: Array<{ type: number; encoding: number; data: Uint8Array<ArrayBuffer> }> = [];
+    private readonly _additionalGLBBuffers: IBuffer[] = [];
+
     public readonly _materialExporter = new GLTFMaterialExporter(this);
 
     private readonly _extensions: { [name: string]: IGLTFExporterExtensionV2 } = {};
@@ -548,11 +551,11 @@ export class GLTFExporter {
     private _generateJSON(bufferByteLength: number, fileName?: string, prettyPrint?: boolean): string {
         const buffer: IBuffer = { byteLength: bufferByteLength };
 
-        if (buffer.byteLength) {
+        if (buffer.byteLength || this._additionalGLBBuffers.length) {
             if (this._shouldUseGlb && this._options.glbVersion === 3 && this._options.gltfVersion === "2.1") {
                 buffer.chunk = 1;
             }
-            this._glTF.buffers = [buffer];
+            this._glTF.buffers = [buffer, ...this._additionalGLBBuffers];
         }
         if (this._nodes && this._nodes.length) {
             this._glTF.nodes = this._nodes;
@@ -656,6 +659,9 @@ export class GLTFExporter {
     }
 
     public async generateGLTFAsync(glTFPrefix: string): Promise<GLTFData> {
+        if (this._additionalGLBChunks.length) {
+            throw new Error("Additional chunks require a GLB version 3 container.");
+        }
         const binaryBuffer = await this._generateBinaryAsync();
         this._extensionsOnExporting();
         const jsonText = this._generateJSON(binaryBuffer.byteLength, glTFPrefix, true);
@@ -701,6 +707,43 @@ export class GLTFExporter {
         return padding;
     }
 
+    /**
+     * Adds a chunk to the GLB version 3 output.
+     * @param data Chunk payload
+     * @param type Four-byte chunk type
+     * @param encoding Chunk encoding
+     * @returns Chunk index, including the JSON and primary binary chunks
+     */
+    public addGLBChunk(data: Uint8Array, type: number, encoding = 0): number {
+        if (this._options.glbVersion !== 3) {
+            throw new Error("Additional chunks require a GLB version 3 container.");
+        }
+        if (!(data instanceof Uint8Array) || !Number.isInteger(type) || type < 0 || type > 0xffffffff || !Number.isInteger(encoding) || encoding < 0 || encoding > 0xffffffff) {
+            throw new Error("Invalid GLB version 3 chunk");
+        }
+
+        const index = this._additionalGLBChunks.length + 2;
+        this._additionalGLBChunks.push({ type, encoding, data: new Uint8Array(data) });
+        return index;
+    }
+
+    /**
+     * Adds a glTF 2.1 buffer backed by an additional GLB version 3 chunk.
+     * @param data Buffer payload
+     * @param type Four-byte chunk type
+     * @returns Buffer index
+     */
+    public addGLBBufferChunk(data: Uint8Array, type = 0x004e4942): number {
+        if (this._options.gltfVersion !== "2.1") {
+            throw new Error("Buffers in GLB version 3 chunks require glTF 2.1.");
+        }
+
+        const chunk = this.addGLBChunk(data, type);
+        const index = this._additionalGLBBuffers.length + 1;
+        this._additionalGLBBuffers.push({ byteLength: data.byteLength, chunk });
+        return index;
+    }
+
     public async generateGLBAsync(glTFPrefix: string): Promise<GLTFData> {
         this._shouldUseGlb = true;
         const binaryBuffer = await this._generateBinaryAsync();
@@ -720,9 +763,14 @@ export class GLTFExporter {
             jsonLength = encodedJsonText.length;
         }
         const jsonPadding = this._getPadding(jsonLength, glb3 ? 8 : 4);
-        const binPadding = glb3 ? 0 : this._getPadding(binaryBuffer.byteLength);
+        const binPadding = glb3 ? (this._additionalGLBChunks.length ? this._getPadding(binaryBuffer.byteLength, 8) : 0) : this._getPadding(binaryBuffer.byteLength);
 
-        const byteLength = headerLength + 2 * chunkLengthPrefix + jsonLength + jsonPadding + binaryBuffer.byteLength + binPadding;
+        const additionalChunksByteLength = this._additionalGLBChunks.reduce(
+            (total, chunk, index) =>
+                total + chunkLengthPrefix + chunk.data.byteLength + (index + 1 < this._additionalGLBChunks.length ? this._getPadding(chunk.data.byteLength, 8) : 0),
+            0
+        );
+        const byteLength = headerLength + 2 * chunkLengthPrefix + jsonLength + jsonPadding + binaryBuffer.byteLength + binPadding + additionalChunksByteLength;
 
         const dataWriter = new DataWriter(byteLength);
 
@@ -781,6 +829,20 @@ export class GLTFExporter {
         // Binary padding
         for (let i = 0; i < binPadding; ++i) {
             dataWriter.writeUInt8(0);
+        }
+
+        for (let index = 0; index < this._additionalGLBChunks.length; index++) {
+            const chunk = this._additionalGLBChunks[index];
+            dataWriter.writeUInt32(chunk.type);
+            dataWriter.writeUInt32(chunk.encoding);
+            dataWriter.writeUInt64(chunk.data.byteLength);
+            dataWriter.writeTypedArray(chunk.data);
+            if (index + 1 < this._additionalGLBChunks.length) {
+                const padding = this._getPadding(chunk.data.byteLength, 8);
+                for (let i = 0; i < padding; i++) {
+                    dataWriter.writeUInt8(0);
+                }
+            }
         }
 
         const container = new GLTFData();
