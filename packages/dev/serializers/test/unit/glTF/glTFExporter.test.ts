@@ -424,6 +424,10 @@ describe("glTF exporter", () => {
                 },
                 { name: "joint" },
             ];
+            const preserveUniqueId = jointLocation === "sibling" && rightHanded && !multiple;
+            if (preserveUniqueId) {
+                source.uniqueIds = { skinnedNode: { pointer: "/nodes/1" } };
+            }
             source.shapes = [{ type: "sphere", sphere: { radius: 2 } }];
             source.skins = [jointLocation === "self" ? { joints: [1], skeleton: 1 } : { joints: [2], skeleton: 2 }];
             const primitive = { attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 } };
@@ -468,7 +472,11 @@ describe("glTF exporter", () => {
                 gltfVersion: "2.1",
                 nodeVisibility: GetGLTFNodeVisibility,
                 nodeBoundingVolume: (node) => (node instanceof TransformNode ? GetGLTFBoundingVolume(node) : undefined),
+                preserveNodeUniqueIds: preserveUniqueId,
             });
+            if (preserveUniqueId) {
+                expect(GetGLTFValueByUniqueId(gltf, "skinnedNode")).toEqual(expect.objectContaining({ name: "skinned" }));
+            }
             if (jointLocation === "sibling" && rightHanded && !multiple) {
                 const boundsOnly = await ExportGltfAsync(testScene.scene, {
                     gltfVersion: "2.1",
