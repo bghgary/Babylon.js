@@ -4,7 +4,8 @@ import { type Animation } from "core/Animations/animation";
 import { type AnimationGroup } from "core/Animations/animationGroup";
 import { type Camera } from "core/Cameras/camera";
 import { type Material } from "core/Materials/material";
-import { type IKHRInteractivity } from "babylonjs-gltf2interface";
+import { type IKHRInteractivity, type IShape } from "babylonjs-gltf2interface";
+import { type Quaternion, type Vector3 } from "core/Maths/math.vector";
 import { type GLTFData } from "./glTFData";
 import { GLTFExporter } from "./glTFExporter";
 
@@ -85,6 +86,18 @@ export interface IKHRInteractivityExportProvider {
     build(context: IKHRInteractivityExportContext): IKHRInteractivity;
 }
 
+/** A bounding volume in a Babylon node's local coordinate system. */
+export interface IGLTFBoundingVolumeExport {
+    /** The box or sphere defining the volume. Shape extensions are not supported. */
+    shape: IShape;
+    /** Translation relative to the node. */
+    translation?: Vector3;
+    /** Rotation relative to the node. */
+    rotation?: Quaternion;
+    /** Scale relative to the node. */
+    scale?: Vector3;
+}
+
 /**
  * Holds a collection of exporter options and parameters
  */
@@ -114,6 +127,15 @@ export interface IExportOptions {
      * @returns authored visibility, or undefined for the glTF default
      */
     nodeVisibility?(node: Node): boolean | undefined;
+
+    /**
+     * Supplies an authored bounding volume for a node. Requires glTF 2.1.
+     * `GetGLTFBoundingVolume` from the loaders package can provide loaded volumes for transform nodes.
+     * Imported skinned meshes cannot be reparented before export.
+     * @param node source Babylon node
+     * @returns the bounding volume, or undefined if the node has none
+     */
+    nodeBoundingVolume?(node: Node): IGLTFBoundingVolumeExport | undefined;
 
     /**
      * Function which indicates whether a babylon node should be exported or not
@@ -154,7 +176,7 @@ export interface IExportOptions {
 
     /**
      * Remove no-op root nodes when possible. Defaults to true. No-op roots are preserved when
-     * {@link khrInteractivity} or {@link nodeVisibility} is provided because they may reference them.
+     * {@link khrInteractivity}, {@link nodeVisibility}, or {@link nodeBoundingVolume} is provided.
      */
     removeNoopRootNodes?: boolean;
 

@@ -15,6 +15,7 @@ import {
     type ITextureInfo,
     type ISkin,
     type ICamera,
+    type IShape,
     AccessorComponentType,
     AccessorType,
     CameraType,
@@ -249,8 +250,8 @@ export class GLTFExporter {
      */
     private _animationSampleRate: number;
 
-    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility">> &
-        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility">;
+    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume">> &
+        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume">;
 
     public _shouldUseGlb: boolean = false;
 
@@ -263,6 +264,7 @@ export class GLTFExporter {
     private readonly _shouldExportNodeMap = new Map<Node, boolean>();
     private readonly _skinnedNodeOwners = new Map<Node, Node>();
     private readonly _skinnedNodeChildren = new Map<Node, Node[]>();
+    private readonly _shapeMap = new Map<IShape, number>();
 
     // Babylon node -> glTF node index
     private readonly _nodeMap = new Map<Node, number>();
@@ -463,6 +465,9 @@ export class GLTFExporter {
         }
         if (this._options.nodeVisibility && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting node visibility requires glTF 2.1.");
+        }
+        if (this._options.nodeBoundingVolume && this._options.gltfVersion !== "2.1") {
+            throw new Error("Exporting a bounding volume requires glTF 2.1.");
         }
         if (this._options.thumbnail) {
             if (this._options.gltfVersion !== "2.1") {
@@ -934,9 +939,9 @@ export class GLTFExporter {
         const rootNodesRH = new Array<Node>();
         const rootNodesLH = new Array<Node>();
         const rootNoopNodesRH = new Array<Node>();
-        const removeNoopRootNodes = this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility;
+        const removeNoopRootNodes = this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility && !this._options.nodeBoundingVolume;
 
-        if (this._options.nodeVisibility) {
+        if (this._options.nodeVisibility || this._options.nodeBoundingVolume) {
             const sceneNodes = this._babylonScene.getNodes();
             const nodeSet = new Set(sceneNodes);
             for (const babylonNode of sceneNodes) {
@@ -945,10 +950,10 @@ export class GLTFExporter {
                     continue;
                 }
                 if (!nodeSet.has(source.node)) {
-                    throw new Error(`Cannot export visibility for skinned node ${babylonNode.name}: its authored node is missing.`);
+                    throw new Error(`Cannot export authored properties for skinned node ${babylonNode.name}: its authored node is missing.`);
                 }
                 if (babylonNode.parent !== source.parent || source.node === babylonNode || source.node.isDescendantOf(babylonNode)) {
-                    throw new Error(`Cannot export visibility for skinned node ${babylonNode.name}: its hierarchy has changed since loading.`);
+                    throw new Error(`Cannot export authored properties for skinned node ${babylonNode.name}: its hierarchy has changed since loading.`);
                 }
                 this._skinnedNodeOwners.set(babylonNode, source.node);
                 const children = this._skinnedNodeChildren.get(source.node) ?? [];
@@ -1452,6 +1457,69 @@ export class GLTFExporter {
             node.visible = visible;
         }
 
+        const boundingVolume = this._options.nodeBoundingVolume?.(babylonNode);
+        if (boundingVolume !== undefined) {
+            if (!boundingVolume?.shape) {
+                throw new Error(`Invalid bounding volume for node ${babylonNode.name}`);
+            }
+            const shape = boundingVolume.shape;
+            const values = shape.type === "box" ? (shape.box?.size ?? [1, 1, 1]) : shape.type === "sphere" ? [shape.sphere?.radius ?? 0.5] : [];
+            if (
+                (shape.type !== "box" && shape.type !== "sphere") ||
+                !Array.isArray(values) ||
+                (shape.type === "box" && values.length !== 3) ||
+                values.some((value) => !Number.isFinite(value) || value <= 0) ||
+                (shape.type === "box" ? !!shape.sphere : !!shape.box) ||
+                !!shape.capsule ||
+                !!shape.cylinder ||
+                !!shape.plane ||
+                !!shape.mesh ||
+                !!shape.convexMesh ||
+                !!shape.extensions ||
+                !!shape.box?.extensions ||
+                !!shape.sphere?.extensions
+            ) {
+                throw new Error(`Invalid bounding volume shape for node ${babylonNode.name}`);
+            }
+            const translation = boundingVolume.translation?.clone();
+            const rotation = boundingVolume.rotation?.clone();
+            const scale = boundingVolume.scale?.clone();
+            if (
+                [translation?.asArray(), rotation?.asArray(), scale?.asArray()].some((components) => components?.some((value) => !Number.isFinite(value))) ||
+                (rotation && rotation.lengthSquared() === 0)
+            ) {
+                throw new Error(`Invalid bounding volume transform for node ${babylonNode.name}`);
+            }
+            if (state.convertToRightHanded) {
+                if (translation) {
+                    ConvertToRightHandedPosition(translation);
+                }
+                if (rotation) {
+                    ConvertToRightHandedRotation(rotation);
+                }
+            }
+            let shapeIndex = this._shapeMap.get(shape);
+            if (shapeIndex === undefined) {
+                const shapes = (this._glTF.shapes ??= []);
+                shapeIndex = shapes.length;
+                shapes.push({
+                    type: shape.type,
+                    name: shape.name,
+                    extensions: shape.extensions,
+                    extras: shape.extras,
+                    box: shape.box,
+                    sphere: shape.sphere,
+                });
+                this._shapeMap.set(shape, shapeIndex);
+            }
+            node.boundingVolume = {
+                shape: shapeIndex,
+                translation: translation?.asArray(),
+                rotation: rotation?.normalize().asArray(),
+                scale: scale?.asArray(),
+            };
+        }
+
         if (babylonNode.name) {
             node.name = babylonNode.name;
         }
@@ -1499,7 +1567,7 @@ export class GLTFExporter {
 
                 // If a parent node exists and can be collapsed, merge their transformations and mark the parent as the camera-containing node.
                 const parentBabylonNode = babylonNode.parent;
-                if (!this._options.nodeVisibility && parentBabylonNode !== null && IsChildCollapsible(babylonNode, parentBabylonNode)) {
+                if (!this._options.nodeVisibility && !this._options.nodeBoundingVolume && parentBabylonNode !== null && IsChildCollapsible(babylonNode, parentBabylonNode)) {
                     const parentNodeIndex = this._nodeMap.get(parentBabylonNode);
                     if (parentNodeIndex !== undefined) {
                         const parentNode = this._nodes[parentNodeIndex];

@@ -18,6 +18,7 @@ import { GLTFLoader } from "loaders/glTF/2.0/glTFLoader.pure";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF as IRuntimeGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
 import { GetGLTFNodeVisibility } from "loaders/glTF/2.0/glTFLoaderVisibility";
+import { GetGLTFBoundingVolume } from "loaders/glTF/2.0/glTFBoundingVolume";
 import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
 import {
     CreateTestScene,
@@ -326,9 +327,17 @@ describe("glTF exporter", () => {
             source.scenes[0].nodes = [0];
             source.nodes = [
                 { name: "parent", visible: false, translation: [5, 0, 0], children: jointLocation === "child" ? [1] : [1, 2] },
-                { name: "skinned", mesh: 0, skin: 0, translation: [2, 0, 0], children: jointLocation === "child" ? [2] : undefined },
+                {
+                    name: "skinned",
+                    mesh: 0,
+                    skin: 0,
+                    translation: [2, 0, 0],
+                    children: jointLocation === "child" ? [2] : undefined,
+                    boundingVolume: { shape: 0, translation: [0, 0, 2] },
+                },
                 { name: "joint" },
             ];
+            source.shapes = [{ type: "sphere", sphere: { radius: 2 } }];
             source.skins = [jointLocation === "self" ? { joints: [1], skeleton: 1 } : { joints: [2], skeleton: 2 }];
             const primitive = { attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 } };
             source.meshes = [{ primitives: multiple ? [primitive, structuredClone(primitive)] : [primitive] }];
@@ -365,12 +374,30 @@ describe("glTF exporter", () => {
             sourceGroup.goToFrame(sourceGroup.to);
             const animatedPosition = sourceVertex();
             sourceGroup.goToFrame(sourceGroup.from);
-            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility });
+            const sourceNode = testScene.scene.transformNodes.find((entry) => entry.name === "skinned")!;
+            const sourceBounds = GetGLTFBoundingVolume(sourceNode)!.getBoundingInfo().boundingBox;
+            const sourceCenter = sourceBounds.centerWorld.clone();
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeVisibility: GetGLTFNodeVisibility,
+                nodeBoundingVolume: (node) => (node instanceof TransformNode ? GetGLTFBoundingVolume(node) : undefined),
+            });
+            if (jointLocation === "sibling" && rightHanded && !multiple) {
+                const boundsOnly = await ExportGltfAsync(testScene.scene, {
+                    gltfVersion: "2.1",
+                    nodeBoundingVolume: (node) => (node instanceof TransformNode ? GetGLTFBoundingVolume(node) : undefined),
+                });
+                const owner = boundsOnly.nodes.find((entry) => entry.boundingVolume);
+                expect(owner?.children?.some((index) => boundsOnly.nodes[index].mesh !== undefined)).toBe(true);
+            }
             gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
             const imported = CreateTestScene();
             imported.scene.useRightHandedSystem = rightHanded;
             try {
                 const container = await new GLTFFileLoader().loadAssetContainerAsync(imported.scene, { json: gltf }, "");
+                const importedNode = container.transformNodes.find((entry) => entry.name === "skinned")!;
+                const importedBounds = GetGLTFBoundingVolume(importedNode)!.getBoundingInfo().boundingBox;
+                expect(Vector3.Distance(importedBounds.centerWorld, sourceCenter)).toBeLessThan(1e-5);
                 const mesh = container.meshes.find((entry) => entry.name === meshName);
                 expect(mesh?.isVisible).toBe(false);
                 if (multiple) {
@@ -457,6 +484,13 @@ describe("glTF exporter", () => {
                 expect(child?.visible).toBe(false);
                 expect(parent?.children?.map((index) => gltf.nodes[index].name)).toContain(childName);
             }
+            const bounded = await ExportGltfAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeBoundingVolume: (node) => (node === camera || node === light || node === area ? { shape: { type: "sphere" } } : undefined),
+            });
+            for (const name of ["camera", "light", "area"]) {
+                expect(bounded.nodes.find((node) => node.name === name)?.boundingVolume).toBeDefined();
+            }
 
             const imported = CreateTestScene();
             try {
@@ -493,6 +527,75 @@ describe("glTF exporter", () => {
             } finally {
                 imported.dispose();
             }
+        });
+
+        it.each([false, true])("round trips authored bounding volumes in a right-handed scene: %s", async (rightHanded) => {
+            testScene.scene.useRightHandedSystem = rightHanded;
+            const source = CreateTriangleGltf();
+            source.asset = { version: "2.1", minVersion: "2.1" };
+            source.nodes = [
+                {
+                    name: "bounded",
+                    translation: [1, 2, 3],
+                    rotation: [0, 0.38268343, 0, 0.92387953],
+                    children: [1, 2],
+                    boundingVolume: { shape: 0, translation: [2, 3, 4], rotation: [0, 0, 0.38268343, 0.92387953], scale: [1, 2, 3] },
+                },
+                { name: "triangle", mesh: 0 },
+                { name: "other", boundingVolume: { shape: 0 } },
+            ];
+            source.shapes = [{ type: "box", box: { size: [2, 4, 6] } }];
+            await ImportGltfAsync(testScene.scene, source);
+            const sourceNode = testScene.scene.transformNodes.find((node) => node.name === "bounded")!;
+            const sourceBounds = GetGLTFBoundingVolume(sourceNode)!.getBoundingInfo().boundingBox;
+            const minimum = sourceBounds.minimumWorld.clone();
+            const maximum = sourceBounds.maximumWorld.clone();
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeBoundingVolume: (node) => (node instanceof TransformNode ? GetGLTFBoundingVolume(node) : undefined),
+            });
+            expect(gltf.shapes).toHaveLength(1);
+            expect(gltf.nodes.find((node) => node.name === "bounded")?.boundingVolume?.shape).toBe(0);
+            expect(gltf.nodes.find((node) => node.name === "other")?.boundingVolume?.shape).toBe(0);
+            gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+            const imported = CreateTestScene();
+            imported.scene.useRightHandedSystem = rightHanded;
+            try {
+                await ImportGltfAsync(imported.scene, gltf);
+                const node = imported.scene.transformNodes.find((entry) => entry.name === "bounded")!;
+                const bounds = GetGLTFBoundingVolume(node)!.getBoundingInfo().boundingBox;
+                expect(Vector3.Distance(bounds.minimumWorld, minimum)).toBeLessThan(1e-5);
+                expect(Vector3.Distance(bounds.maximumWorld, maximum)).toBeLessThan(1e-5);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("rejects bounding volumes for glTF 2.0", async () => {
+            await expect(ExportGltfAsync(testScene.scene, { nodeBoundingVolume: () => undefined })).rejects.toThrow(/bounding volume.*2.1/i);
+        });
+
+        it("rejects unsupported or degenerate bounding-volume shapes", async () => {
+            new TransformNode("bounded", testScene.scene);
+            await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeBoundingVolume: () => ({ shape: { type: "capsule" } }) })).rejects.toThrow(
+                /invalid bounding volume shape/i
+            );
+            await expect(
+                ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeBoundingVolume: () => ({ shape: { type: "box", box: { size: [1, 0, 1] } } }) })
+            ).rejects.toThrow(/invalid bounding volume shape/i);
+            await expect(
+                ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeBoundingVolume: () => ({ shape: { type: "box", extensions: { CUSTOM_shape: {} } } }) })
+            ).rejects.toThrow(/invalid bounding volume shape/i);
+        });
+
+        it("rejects non-finite bounding-volume transforms", async () => {
+            new TransformNode("bounded", testScene.scene);
+            await expect(
+                ExportGltfAsync(testScene.scene, {
+                    gltfVersion: "2.1",
+                    nodeBoundingVolume: () => ({ shape: { type: "sphere" }, translation: new Vector3(Infinity, 0, 0) }),
+                })
+            ).rejects.toThrow(/invalid bounding volume transform/i);
         });
     });
 

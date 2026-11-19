@@ -140,7 +140,7 @@ export class EXT_lights_area implements IGLTFExporterExtensionV2 {
             // Why and when: the glTF loader generates a new parent TransformNode for each light node, which we should undo on export
             const parentBabylonNode = babylonNode.parent;
 
-            if (!this._exporter.options.nodeVisibility && parentBabylonNode && IsChildCollapsible(areaLight, parentBabylonNode)) {
+            if (!this._exporter.options.nodeVisibility && !this._exporter.options.nodeBoundingVolume && parentBabylonNode && IsChildCollapsible(areaLight, parentBabylonNode)) {
                 const parentNodeIndex = nodeMap.get(parentBabylonNode);
                 if (parentNodeIndex) {
                     // Combine the light's transformation with the parent's
