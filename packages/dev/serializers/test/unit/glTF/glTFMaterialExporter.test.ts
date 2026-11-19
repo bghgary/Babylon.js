@@ -12,7 +12,7 @@ import { Scene } from "core/scene";
 
 import { GLTF2Export } from "serializers/glTF/2.0/glTFSerializer";
 import { type IKHRMaterialsTransmission, type IKHRTextureTransform, type IMaterial } from "babylonjs-gltf2interface";
-import { CreateTestScene, CreateTriangleGltf, ExportGltfAsync, RoundTripGltfAsync } from "./glTFTestUtils";
+import { CreateTestScene, CreateTriangleGltf, ExportGltfAsync, GetBlobFile, GetTextFile, ParseGltfJson, RoundTripGltfAsync } from "./glTFTestUtils";
 
 // Minimal 1x1 red PNG — lets us assert a known buffer flows through the
 // export pipeline without needing any real image decoding at test time.
@@ -113,6 +113,55 @@ describe("glTF Exporter - NullEngine / cached texture path", () => {
         } finally {
             loadFileSpy.mockRestore();
         }
+    });
+
+    it("exports WebP as a core image in glTF 2.1 while preserving the 2.0 extension", async () => {
+        const box = CreateBox("box", {}, scene);
+        const material = new PBRMaterial("material", scene);
+        material.metallic = 0;
+        material.roughness = 1;
+        const bytes = Uint8Array.from(atob("UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA"), (character) => character.charCodeAt(0));
+        const texture = new Texture("image.webp", scene, { buffer: bytes, mimeType: "image/webp" });
+        const internalTexture = texture.getInternalTexture();
+        if (!internalTexture) {
+            throw new Error("Expected an internal texture");
+        }
+        internalTexture._buffer = bytes;
+        material.albedoTexture = texture;
+        box.material = material;
+
+        const oldData = await GLTF2Export.GLTFAsync(scene, "old", { exportWithoutWaitingForScene: true });
+        const oldGltf = ParseGltfJson(GetTextFile(oldData.files["old.gltf"]));
+        expect(oldGltf.extensionsRequired).toContain("EXT_texture_webp");
+        expect(oldGltf.textures[0].source).toBeUndefined();
+        expect(oldGltf.textures[0].extensions?.EXT_texture_webp).toEqual({ source: 0 });
+
+        const data = await GLTF2Export.GLTFAsync(scene, "model", { gltfVersion: "2.1", exportWithoutWaitingForScene: true });
+        const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
+        expect(gltf.extensionsUsed ?? []).not.toContain("EXT_texture_webp");
+        expect(gltf.textures[0].source).toBe(0);
+        expect(gltf.textures[0].extensions?.EXT_texture_webp).toBeUndefined();
+        const imageUri = gltf.images![0].uri;
+        if (!imageUri) {
+            throw new Error("Expected an external image URI");
+        }
+        expect(imageUri).toMatch(/\.webp$/);
+        expect(new Uint8Array(await GetBlobFile(data.files[imageUri]).arrayBuffer())).toEqual(bytes);
+
+        const binary = await GLTF2Export.GLBAsync(scene, "model", { gltfVersion: "2.1", exportWithoutWaitingForScene: true });
+        const glb = new DataView(await GetBlobFile(binary.files["model.glb"]).arrayBuffer());
+        const jsonLength = glb.getUint32(12, true);
+        const binaryGltf = ParseGltfJson(new TextDecoder().decode(new Uint8Array(glb.buffer, 20, jsonLength)));
+        expect(binaryGltf.textures[0].source).toBe(0);
+        expect(binaryGltf.images![0].mimeType).toBe("image/webp");
+        expect(binaryGltf.extensionsUsed ?? []).not.toContain("EXT_texture_webp");
+        const imageViewIndex = binaryGltf.images![0].bufferView;
+        if (imageViewIndex === undefined) {
+            throw new Error("Expected an embedded image");
+        }
+        const imageView = binaryGltf.bufferViews[imageViewIndex];
+        const binStart = 20 + jsonLength + 8;
+        expect(new Uint8Array(glb.buffer, binStart + (imageView.byteOffset ?? 0), imageView.byteLength)).toEqual(bytes);
     });
 });
 

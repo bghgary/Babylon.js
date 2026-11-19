@@ -14,7 +14,7 @@ const NAME = "EXT_texture_webp";
 export class EXT_texture_webp implements IGLTFExporterExtensionV2 {
     public readonly name = NAME;
 
-    public enabled = true;
+    public enabled: boolean;
 
     public required = true;
 
@@ -28,6 +28,7 @@ export class EXT_texture_webp implements IGLTFExporterExtensionV2 {
 
     constructor(exporter: GLTFExporter) {
         this._exporter = exporter;
+        this.enabled = exporter.options.gltfVersion !== "2.1";
     }
 
     public dispose() {}
@@ -38,6 +39,9 @@ export class EXT_texture_webp implements IGLTFExporterExtensionV2 {
      * @param textureInfo - the glTF texture info for the exported texture
      */
     public postExportTexture(_: string, textureInfo: BABYLON.GLTF2.ITextureInfo): void {
+        if (!this.enabled) {
+            return;
+        }
         const texture = this._exporter._textures[textureInfo.index];
         const imageIndex = texture.source;
         if (imageIndex === undefined) {
