@@ -100,6 +100,11 @@ export interface IExportOptions {
     glbVersion?: 2 | 3;
 
     /**
+     * An encoded PNG, JPEG, or WebP thumbnail image. Requires glTF 2.1.
+     */
+    thumbnail?: Blob;
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)

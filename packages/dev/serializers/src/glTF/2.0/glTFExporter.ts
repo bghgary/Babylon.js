@@ -249,7 +249,7 @@ export class GLTFExporter {
      */
     private _animationSampleRate: number;
 
-    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity">> & Pick<IExportOptions, "khrInteractivity">;
+    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail">> & Pick<IExportOptions, "khrInteractivity" | "thumbnail">;
 
     public _shouldUseGlb: boolean = false;
 
@@ -458,6 +458,14 @@ export class GLTFExporter {
         if (this._options.glbVersion !== 2 && this._options.glbVersion !== 3) {
             throw new Error(`Unsupported binary glTF container version: ${this._options.glbVersion}`);
         }
+        if (this._options.thumbnail) {
+            if (this._options.gltfVersion !== "2.1") {
+                throw new Error("Exporting a thumbnail requires glTF 2.1.");
+            }
+            if (!["image/png", "image/jpeg", "image/webp"].includes(this._options.thumbnail.type)) {
+                throw new Error(`Unsupported thumbnail image type: ${this._options.thumbnail.type}`);
+            }
+        }
         if (this._options.gltfVersion === "2.1") {
             this._glTF.asset.version = "2.1";
             this._glTF.asset.minVersion = "2.1";
@@ -597,6 +605,9 @@ export class GLTFExporter {
 
     private async _generateBinaryAsync(): Promise<Uint8Array<ArrayBuffer>> {
         await this._exportSceneAsync();
+        if (this._options.thumbnail) {
+            this._glTF.asset.thumbnail = await this._materialExporter._exportImageAsync("thumbnail", this._options.thumbnail);
+        }
         await this._extensionsPreGenerateBinaryAsync();
         return this._bufferManager.generateBinary(this._bufferViews);
     }

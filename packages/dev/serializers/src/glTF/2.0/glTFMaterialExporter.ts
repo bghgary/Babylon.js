@@ -1115,7 +1115,8 @@ export class GLTFMaterialExporter {
         return await imageIndexPromise;
     }
 
-    private async _exportImageAsync(name: string, imageData: Blob): Promise<number> {
+    /** @internal */
+    public async _exportImageAsync(name: string, imageData: Blob): Promise<number> {
         const images = this._exporter._images;
 
         let image: IImage;

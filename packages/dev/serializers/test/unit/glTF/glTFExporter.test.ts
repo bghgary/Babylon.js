@@ -11,6 +11,7 @@ import { ImportMeshAsync } from "core/Loading";
 import { type IAccessor, type ICamera } from "babylonjs-gltf2interface";
 import { GLTF2Export } from "serializers/glTF/2.0";
 import { DataWriter } from "serializers/glTF/2.0/dataWriter";
+import { GLTFLoader } from "loaders/glTF/2.0/glTFLoader.pure";
 import {
     CreateTestScene,
     CreateTriangleGltf,
@@ -150,6 +151,36 @@ describe("glTF exporter", () => {
             writer.writeUInt64(0x100000005);
             expect(Array.from(writer.getOutputData())).toEqual([5, 0, 0, 0, 1, 0, 0, 0]);
             expect(() => writer.writeUInt64(Number.MAX_SAFE_INTEGER + 1)).toThrow();
+        });
+
+        it("exports a thumbnail in glTF and both binary container versions", async () => {
+            const bytes = Uint8Array.from(atob("UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA"), (character) => character.charCodeAt(0));
+            const thumbnail = new Blob([bytes], { type: "image/webp" });
+            const options = { gltfVersion: "2.1" as const, thumbnail, exportWithoutWaitingForScene: true };
+            const data = await GLTF2Export.GLTFAsync(testScene.scene, "model", options);
+            const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
+            const image = gltf.images?.[gltf.asset.thumbnail!];
+            if (!image?.uri) {
+                throw new Error("Expected an external thumbnail");
+            }
+            expect(new Uint8Array(await GetBlobFile(data.files[image.uri]).arrayBuffer())).toEqual(bytes);
+
+            for (const glbVersion of [2, 3] as const) {
+                const binary = await GLTF2Export.GLBAsync(testScene.scene, "model", { ...options, glbVersion });
+                const glb = new Uint8Array(await GetBlobFile(binary.files["model.glb"]).arrayBuffer());
+                const loaded = await GLTFLoader.LoadThumbnailAsync(testScene.scene, glb, "");
+                expect(loaded?.mimeType).toBe("image/webp");
+                expect(loaded?.data).toEqual(bytes);
+            }
+        });
+
+        it("rejects thumbnails for glTF 2.0 and unsupported image types", async () => {
+            const png = new Blob([new Uint8Array([1])], { type: "image/png" });
+            const invalid = new Blob([new Uint8Array([1])], { type: "image/gif" });
+            await expect(GLTF2Export.GLTFAsync(testScene.scene, "model", { thumbnail: png, exportWithoutWaitingForScene: true })).rejects.toThrow(/thumbnail.*2.1/i);
+            await expect(GLTF2Export.GLTFAsync(testScene.scene, "model", { gltfVersion: "2.1", thumbnail: invalid, exportWithoutWaitingForScene: true })).rejects.toThrow(
+                /thumbnail.*image\/gif/i
+            );
         });
 
         it("writes a binary glTF with a JSON chunk followed by a BIN chunk", async () => {

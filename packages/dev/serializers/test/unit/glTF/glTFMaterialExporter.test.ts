@@ -163,6 +163,27 @@ describe("glTF Exporter - NullEngine / cached texture path", () => {
         const binStart = 20 + jsonLength + 8;
         expect(new Uint8Array(glb.buffer, binStart + (imageView.byteOffset ?? 0), imageView.byteLength)).toEqual(bytes);
     });
+
+    it("keeps a thumbnail distinct from a material image with the same name", async () => {
+        const { texture } = buildTexturedBox();
+        texture.name = "thumbnail";
+        const internalTexture = texture.getInternalTexture()!;
+        internalTexture._buffer = new Blob([OnePixelRedPng], { type: "image/png" });
+        const thumbnailBytes = OnePixelRedPng;
+        const thumbnail = new Blob([thumbnailBytes], { type: "image/png" });
+
+        const data = await GLTF2Export.GLTFAsync(scene, "model", { gltfVersion: "2.1", thumbnail, exportWithoutWaitingForScene: true });
+        const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
+        const textureImageIndex = gltf.textures[0].source;
+        const thumbnailIndex = gltf.asset.thumbnail;
+        expect(thumbnailIndex).toBeDefined();
+        expect(thumbnailIndex).not.toBe(textureImageIndex);
+        const textureUri = gltf.images![textureImageIndex!].uri!;
+        const thumbnailUri = gltf.images![thumbnailIndex!].uri!;
+        expect(textureUri).not.toBe(thumbnailUri);
+        expect(new Uint8Array(await GetBlobFile(data.files[textureUri]).arrayBuffer())).toEqual(OnePixelRedPng);
+        expect(new Uint8Array(await GetBlobFile(data.files[thumbnailUri]).arrayBuffer())).toEqual(thumbnailBytes);
+    });
 });
 
 describe("glTF Exporter - material properties", () => {
