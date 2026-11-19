@@ -183,6 +183,27 @@ describe("glTF exporter", () => {
             expect(Array.from(bytes.subarray(chunkOffset + 16))).toEqual([7, 8, 9]);
         });
 
+        it("writes authored glTF shape definitions", async () => {
+            const exporter = new GLTFExporter(testScene.scene, { gltfVersion: "2.1", exportWithoutWaitingForScene: true });
+            const shape = { type: "capsule", capsule: { height: 2, radiusTop: 0.5, radiusBottom: 0.25 }, extras: { source: "test" } };
+            expect(exporter.addShape(shape)).toBe(0);
+            expect(exporter.addShape(shape)).toBe(0);
+            expect(() => exporter.addShape({ type: "sphere", box: { size: [1, 1, 1] } })).toThrow(/different shape property/);
+            expect(() => exporter.addShape({ type: "mesh" })).toThrow(/requires a valid mesh index/);
+            expect(() => exporter.addShape({ type: "box", box: { size: [1, 0, 1] } })).toThrow(/positive finite size/);
+            expect(() => new GLTFExporter(testScene.scene, { exportWithoutWaitingForScene: true }).addShape(shape)).toThrow(/requires glTF 2.1/);
+
+            const data = await exporter.generateGLTFAsync("model");
+            const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
+            expect(gltf.shapes).toEqual([shape]);
+        });
+
+        it("rejects shape references to missing meshes", async () => {
+            const exporter = new GLTFExporter(testScene.scene, { gltfVersion: "2.1", exportWithoutWaitingForScene: true });
+            exporter.addShape({ type: "mesh", mesh: { mesh: 0 } });
+            await expect(exporter.generateGLTFAsync("model")).rejects.toThrow(/references a missing mesh/);
+        });
+
         it("writes a version 3 container for a glTF 2.0 asset without a chunk property", async () => {
             CreateBox("box", {}, testScene.scene);
             const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { glbVersion: 3, exportWithoutWaitingForScene: true });

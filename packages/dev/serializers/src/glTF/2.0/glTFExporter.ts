@@ -19,6 +19,7 @@ import {
     AccessorComponentType,
     AccessorType,
     CameraType,
+    MeshPrimitiveMode,
 } from "babylonjs-gltf2interface";
 import { type FloatArray, type IndicesArray, type Nullable } from "core/types";
 import { TmpVectors, Quaternion, type Matrix } from "core/Maths/math.vector";
@@ -595,6 +596,13 @@ export class GLTFExporter {
             this._glTF.images = this._images;
         }
 
+        if (this._glTF.shapes?.length) {
+            if (this._options.gltfVersion !== "2.1") {
+                throw new Error("Exporting shapes requires glTF 2.1.");
+            }
+            this._validateShapeMeshReferences();
+        }
+
         if (!this._shouldUseGlb) {
             buffer.uri = fileName + ".bin";
         }
@@ -742,6 +750,118 @@ export class GLTFExporter {
         const index = this._additionalGLBBuffers.length + 1;
         this._additionalGLBBuffers.push({ byteLength: data.byteLength, chunk });
         return index;
+    }
+
+    /**
+     * Adds a glTF shape definition to the document.
+     * @param shape Shape definition
+     * @returns Shape index
+     */
+    public addShape(shape: IShape): number {
+        if (this._options.gltfVersion !== "2.1") {
+            throw new Error("Exporting shapes requires glTF 2.1.");
+        }
+        if (!shape || typeof shape.type !== "string" || !shape.type) {
+            throw new Error("Invalid glTF shape");
+        }
+
+        const shapeProperties = ["box", "sphere", "capsule", "cylinder", "plane", "mesh", "convexMesh"];
+        const shapeProperty = shape.type === "convexMesh" ? "convexMesh" : shape.type;
+        if (shapeProperties.includes(shape.type) && shapeProperties.some((property) => property !== shapeProperty && shape[property as keyof IShape] !== undefined)) {
+            throw new Error(`Shape type '${shape.type}' cannot define a different shape property`);
+        }
+        switch (shape.type) {
+            case "box": {
+                const size = shape.box?.size ?? [1, 1, 1];
+                if (!Array.isArray(size) || size.length !== 3 || size.some((value) => !Number.isFinite(value) || value <= 0)) {
+                    throw new Error("Box shapes require three positive finite size values");
+                }
+                break;
+            }
+            case "sphere":
+                if (!Number.isFinite(shape.sphere?.radius ?? 0.5) || (shape.sphere?.radius ?? 0.5) <= 0) {
+                    throw new Error("Sphere shapes require a positive finite radius");
+                }
+                break;
+            case "capsule":
+            case "cylinder": {
+                const parameters = shape[shape.type];
+                const height = parameters?.height ?? (shape.type === "capsule" ? 1 : 2);
+                const radiusTop = parameters?.radiusTop ?? 0.5;
+                const radiusBottom = parameters?.radiusBottom ?? 0.5;
+                if (
+                    !Number.isFinite(height) ||
+                    height <= 0 ||
+                    !Number.isFinite(radiusTop) ||
+                    radiusTop < 0 ||
+                    !Number.isFinite(radiusBottom) ||
+                    radiusBottom < 0 ||
+                    (radiusTop === 0 && radiusBottom === 0)
+                ) {
+                    throw new Error(`${shape.type} shapes require a positive height and at least one positive finite radius`);
+                }
+                break;
+            }
+            case "plane": {
+                const sizeX = shape.plane?.sizeX;
+                const sizeZ = shape.plane?.sizeZ;
+                if ((sizeX !== undefined && (!Number.isFinite(sizeX) || sizeX <= 0)) || (sizeZ !== undefined && (!Number.isFinite(sizeZ) || sizeZ <= 0))) {
+                    throw new Error("Plane shape extents must be positive finite values");
+                }
+                break;
+            }
+            case "mesh":
+            case "convexMesh":
+                if (!shape[shape.type] || !Number.isInteger(shape[shape.type]?.mesh) || shape[shape.type]!.mesh < 0) {
+                    throw new Error(`Shape type '${shape.type}' requires a valid mesh index`);
+                }
+                break;
+        }
+
+        let shapeIndex = this._shapeMap.get(shape);
+        if (shapeIndex === undefined) {
+            const shapes = (this._glTF.shapes ??= []);
+            shapeIndex = shapes.length;
+            shapes.push({
+                type: shape.type,
+                name: shape.name,
+                extensions: shape.extensions,
+                extras: shape.extras,
+                box: shape.box,
+                sphere: shape.sphere,
+                capsule: shape.capsule,
+                cylinder: shape.cylinder,
+                plane: shape.plane,
+                mesh: shape.mesh,
+                convexMesh: shape.convexMesh,
+            });
+            this._shapeMap.set(shape, shapeIndex);
+        }
+        return shapeIndex;
+    }
+
+    private _validateShapeMeshReferences(): void {
+        for (const shape of this._glTF.shapes ?? []) {
+            if (shape.type !== "mesh" && shape.type !== "convexMesh") {
+                continue;
+            }
+            const meshIndex = shape[shape.type]?.mesh;
+            const mesh = meshIndex === undefined ? undefined : this._glTF.meshes?.[meshIndex];
+            if (!mesh) {
+                throw new Error(`Shape type '${shape.type}' references a missing mesh`);
+            }
+            if (mesh.primitives.length !== 1) {
+                throw new Error(`Shape type '${shape.type}' requires a mesh with exactly one primitive`);
+            }
+            const primitive = mesh.primitives[0];
+            const mode = primitive.mode ?? MeshPrimitiveMode.TRIANGLES;
+            if (![MeshPrimitiveMode.TRIANGLES, MeshPrimitiveMode.TRIANGLE_STRIP, MeshPrimitiveMode.TRIANGLE_FAN].includes(mode)) {
+                throw new Error(`Shape type '${shape.type}' requires a triangle-based mesh`);
+            }
+            if (primitive.attributes?.POSITION === undefined) {
+                throw new Error(`Shape type '${shape.type}' requires a mesh with POSITION data`);
+            }
+        }
     }
 
     public async generateGLBAsync(glTFPrefix: string): Promise<GLTFData> {
@@ -1643,20 +1763,7 @@ export class GLTFExporter {
                     ConvertToRightHandedRotation(rotation);
                 }
             }
-            let shapeIndex = this._shapeMap.get(shape);
-            if (shapeIndex === undefined) {
-                const shapes = (this._glTF.shapes ??= []);
-                shapeIndex = shapes.length;
-                shapes.push({
-                    type: shape.type,
-                    name: shape.name,
-                    extensions: shape.extensions,
-                    extras: shape.extras,
-                    box: shape.box,
-                    sphere: shape.sphere,
-                });
-                this._shapeMap.set(shape, shapeIndex);
-            }
+            const shapeIndex = this.addShape(shape);
             node.boundingVolume = {
                 shape: shapeIndex,
                 translation: translation?.asArray(),
