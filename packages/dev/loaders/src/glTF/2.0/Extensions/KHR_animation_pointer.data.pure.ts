@@ -9,7 +9,7 @@ import { AnimationPropertyInfo, RegisterGLTFLoaderAnimation } from "../glTFLoade
 import { Color3 } from "core/Maths/math.color.pure";
 import { _GetEmissiveStrengthTarget, SetInterpolationForKey } from "./objectModelMapping";
 import { _GetAreaLightDimensions } from "./gltfAreaLightDimensions";
-import { SetNodeVisibility } from "../glTFLoaderVisibility";
+import { RegisterGLTFVisibilityAnimationTarget, SetNodeVisibility } from "../glTFLoaderVisibility";
 
 function getColor3(_target: any, source: Float32Array, offset: number, scale: number): Color3 {
     return Color3.FromArray(source, offset).scale(scale);
@@ -116,6 +116,7 @@ class NodeVisibilityAnimationPropertyInfo extends AnimationPropertyInfo {
                 SetNodeVisibility(target, value !== 0);
             },
         };
+        RegisterGLTFVisibilityAnimationTarget(visibility, target);
         return [{ babylonAnimatable: visibility, babylonAnimation: this._buildAnimation(name, fps, keys) }];
     }
 }

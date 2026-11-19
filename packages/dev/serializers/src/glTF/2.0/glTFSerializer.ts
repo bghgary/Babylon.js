@@ -141,6 +141,16 @@ export interface IExportOptions {
     nodeVisibility?(node: Node): boolean | undefined;
 
     /**
+     * Maps a visibility animation target to its authored node. Requires nodeVisibility.
+     * `GetGLTFVisibilityAnimationTarget` from the loaders package identifies loaded targets.
+     * Only step-interpolated numeric animations are supported.
+     * @param target targeted animation target
+     * @param animation targeted animation
+     * @returns the authored node, or undefined for other animations
+     */
+    nodeVisibilityAnimationTarget?(target: unknown, animation: Animation): Node | undefined;
+
+    /**
      * Supplies an authored bounding volume for a node. Requires glTF 2.1.
      * `GetGLTFBoundingVolume` from the loaders package can provide loaded volumes for transform nodes.
      * Imported skinned meshes cannot be reparented before export.

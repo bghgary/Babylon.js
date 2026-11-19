@@ -11,16 +11,18 @@ import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
 import { Material } from "core/Materials/material";
 import { MultiMaterial } from "core/Materials/multiMaterial";
 import { ImportMeshAsync } from "core/Loading";
-import { type IAccessor, type ICamera } from "babylonjs-gltf2interface";
+import { type IAccessor, type ICamera, type IAnimationChannel } from "babylonjs-gltf2interface";
 import { GLTF2Export } from "serializers/glTF/2.0";
 import { DataWriter } from "serializers/glTF/2.0/dataWriter";
 import { GLTFLoader } from "loaders/glTF/2.0/glTFLoader.pure";
 import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
 import { type IGLTF as IRuntimeGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
-import { GetGLTFNodeVisibility } from "loaders/glTF/2.0/glTFLoaderVisibility";
+import { GetGLTFNodeVisibility, GetGLTFVisibilityAnimationTarget } from "loaders/glTF/2.0/glTFLoaderVisibility";
 import { GetGLTFBoundingVolume } from "loaders/glTF/2.0/glTFBoundingVolume";
 import { GetGLTFValueByUniqueId } from "loaders/glTF/2.0/glTFUniqueIds";
 import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
+import "loaders/glTF/2.0/Extensions/KHR_animation_pointer";
+import "loaders/glTF/2.0/Extensions/KHR_animation_pointer.data";
 import {
     CreateTestScene,
     CreateTriangleGltf,
@@ -35,6 +37,31 @@ import {
     RoundTripGltfWithBinaryAsync,
     ToDataUri,
 } from "./glTFTestUtils";
+
+function CreateVisibilityAnimationGltf() {
+    const source = CreateTriangleGltf();
+    source.asset = { version: "2.1", minVersion: "2.1" };
+    source.extensionsUsed = ["KHR_animation_pointer"];
+    source.nodes = [
+        { name: "parent", visible: true, children: [1] },
+        { name: "triangle", mesh: 0 },
+    ];
+    const times = new Float32Array([0, 1, 2]);
+    const values = new Uint8Array([1, 0, 1]);
+    source.buffers.push({ byteLength: 15, uri: ToDataUri(times, values) });
+    source.bufferViews.push({ buffer: 1, byteOffset: 0, byteLength: 12 }, { buffer: 1, byteOffset: 12, byteLength: 3 });
+    source.accessors.push(
+        { bufferView: 3, componentType: 5126, count: 3, type: "SCALAR" as IAccessor["type"], min: [0], max: [2] },
+        { bufferView: 4, componentType: 5121, count: 3, type: "SCALAR" as IAccessor["type"] }
+    );
+    source.animations = [
+        {
+            samplers: [{ input: 3, output: 4, interpolation: "STEP" }],
+            channels: [{ sampler: 0, target: { path: "pointer" as IAnimationChannel["target"]["path"], extensions: { KHR_animation_pointer: { pointer: "/nodes/0/visible" } } } }],
+        },
+    ];
+    return source;
+}
 
 describe("glTF exporter", () => {
     let testScene: ReturnType<typeof CreateTestScene>;
@@ -305,6 +332,65 @@ describe("glTF exporter", () => {
             const gltf = await RoundTripGltfAsync(testScene.scene, source, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility });
             expect(gltf.nodes.find((node) => node.name === "parent")?.visible).toBe(false);
             expect(gltf.nodes.find((node) => node.name === "triangle")?.visible).toBe(true);
+        });
+
+        it("round trips loaded visibility animation", async () => {
+            await ImportGltfAsync(testScene.scene, CreateVisibilityAnimationGltf());
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeVisibility: GetGLTFNodeVisibility,
+                nodeVisibilityAnimationTarget: (target) => GetGLTFVisibilityAnimationTarget(target),
+            });
+            expect(gltf.extensionsRequired).toContain("KHR_animation_pointer");
+            const channel = gltf.animations![0].channels[0];
+            const sampler = gltf.animations![0].samplers[channel.sampler];
+            expect(sampler.interpolation).toBe("STEP");
+            expect(gltf.accessors[sampler.output].componentType).toBe(5121);
+            expect(channel.target.extensions?.KHR_animation_pointer).toEqual({ pointer: `/nodes/${gltf.nodes.findIndex((node) => node.name === "parent")}/visible` });
+            expect(ReadAccessor(gltf, bin, sampler.output)).toEqual([1, 0, 1]);
+            gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+            const imported = CreateTestScene();
+            try {
+                await ImportGltfAsync(imported.scene, gltf);
+                const mesh = imported.scene.getMeshByName("triangle")!;
+                const group = imported.scene.animationGroups[0];
+                group.start(false);
+                group.goToFrame(60);
+                expect(mesh.isVisible).toBe(false);
+                group.goToFrame(120);
+                expect(mesh.isVisible).toBe(true);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("honors animation filters and rejects invalid visibility animations", async () => {
+            await ImportGltfAsync(testScene.scene, CreateVisibilityAnimationGltf());
+            const options = { gltfVersion: "2.1" as const, nodeVisibility: GetGLTFNodeVisibility, nodeVisibilityAnimationTarget: GetGLTFVisibilityAnimationTarget };
+            const filtered = await ExportGltfAsync(testScene.scene, { ...options, shouldExportAnimation: () => false });
+            expect(filtered.animations).toBeUndefined();
+            expect(filtered.extensionsUsed ?? []).not.toContain("KHR_animation_pointer");
+            await expect(ExportGltfAsync(testScene.scene, { ...options, shouldExportNode: (node) => node.name !== "parent" })).rejects.toThrow(/not exported/i);
+            const group = testScene.scene.animationGroups[0];
+            const targeted = group.targetedAnimations[0];
+            const keys = targeted.animation.getKeys();
+            const interpolation = keys[0].interpolation;
+            keys[0].interpolation = undefined;
+            await expect(ExportGltfAsync(testScene.scene, options)).rejects.toThrow(/invalid visibility animation/i);
+            keys[0].interpolation = interpolation;
+            group.addTargetedAnimation(targeted.animation.clone(), targeted.target);
+            await expect(ExportGltfAsync(testScene.scene, options)).rejects.toThrow(/duplicate visibility animation/i);
+            await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibilityAnimationTarget: GetGLTFVisibilityAnimationTarget })).rejects.toThrow(
+                /requires nodeVisibility/i
+            );
+        });
+
+        it("loads visibility animation targeting a node outside the selected scene", async () => {
+            const source = CreateVisibilityAnimationGltf();
+            source.scenes[0].nodes = [1];
+            await ImportGltfAsync(testScene.scene, source);
+            const target = testScene.scene.animationGroups[0].targetedAnimations[0].target;
+            expect(GetGLTFVisibilityAnimationTarget(target)).toBeUndefined();
         });
 
         it.each([

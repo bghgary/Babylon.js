@@ -399,6 +399,8 @@ export class _GLTFAnimation {
      * @param leftHandedNodes nodes that require right-handed conversion
      * @param shouldExportAnimation optional animation filter
      * @param animationGroupMap final glTF animation index for each exported Babylon animation group
+     * @param visibilityTarget maps visibility animation targets to authored nodes
+     * @param onVisibilityExported records the required extension and target property
      */
     public static _CreateNodeAndMorphAnimationFromAnimationGroups(
         babylonScene: Scene,
@@ -410,13 +412,16 @@ export class _GLTFAnimation {
         animationSampleRate: number,
         leftHandedNodes: Set<Node>,
         shouldExportAnimation?: (animation: Animation) => boolean,
-        animationGroupMap?: Map<AnimationGroup, number>
+        animationGroupMap?: Map<AnimationGroup, number>,
+        visibilityTarget?: (target: unknown, animation: Animation) => Node | undefined,
+        onVisibilityExported?: (nodeIndex: number) => void
     ) {
         let glTFAnimation: IAnimation;
         if (babylonScene.animationGroups) {
             const animationGroups = babylonScene.animationGroups;
             for (const animationGroup of animationGroups) {
                 const morphAnimations: Map<Mesh, Map<MorphTarget, Animation>> = new Map();
+                const visibilityNodes = new Set<Node>();
                 const sampleAnimations: Map<Mesh, Animation> = new Map();
                 const morphAnimationMeshes: Set<Mesh> = new Set();
                 const animationGroupFrameDiff = animationGroup.to - animationGroup.from;
@@ -435,7 +440,59 @@ export class _GLTFAnimation {
 
                     const convertToRightHanded = leftHandedNodes.has(target);
 
-                    if (this._IsTransformable(target) || (target.length === 1 && this._IsTransformable(target[0]))) {
+                    const visibilityNode = visibilityTarget?.(target, animation);
+                    if (visibilityNode) {
+                        if (visibilityNodes.has(visibilityNode)) {
+                            throw new Error(`Duplicate visibility animation for node ${visibilityNode.name}.`);
+                        }
+                        visibilityNodes.add(visibilityNode);
+                        const nodeIndex = nodeMap.get(visibilityNode);
+                        if (nodeIndex === undefined) {
+                            throw new Error(`Cannot export visibility animation: node ${visibilityNode.name} was not exported.`);
+                        }
+                        const keys = animation.getKeys();
+                        const fps = animation.framePerSecond;
+                        if (!keys.length || !Number.isFinite(fps) || fps <= 0) {
+                            throw new Error(`Invalid visibility animation ${animation.name}`);
+                        }
+                        const times = new Float32Array(keys.length);
+                        const values = new Uint8Array(keys.length);
+                        for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+                            const key = keys[keyIndex];
+                            const time = key.frame / fps;
+                            if (
+                                !Number.isFinite(time) ||
+                                time < 0 ||
+                                typeof key.value !== "number" ||
+                                !Number.isFinite(key.value) ||
+                                (keyIndex < keys.length - 1 && key.interpolation !== AnimationKeyInterpolation.STEP)
+                            ) {
+                                throw new Error(`Invalid visibility animation ${animation.name}`);
+                            }
+                            times[keyIndex] = time;
+                            if (!Number.isFinite(times[keyIndex]) || (keyIndex > 0 && times[keyIndex] <= times[keyIndex - 1])) {
+                                throw new Error(`Invalid visibility animation times for ${animation.name}`);
+                            }
+                            values[keyIndex] = key.value === 0 ? 0 : 1;
+                        }
+                        const inputView = bufferManager.createBufferView(times);
+                        const input =
+                            accessors.push(
+                                bufferManager.createAccessor(inputView, AccessorType.SCALAR, AccessorComponentType.FLOAT, times.length, undefined, {
+                                    min: [times[0]],
+                                    max: [times[times.length - 1]],
+                                })
+                            ) - 1;
+                        const outputView = bufferManager.createBufferView(values);
+                        const output = accessors.push(bufferManager.createAccessor(outputView, AccessorType.SCALAR, AccessorComponentType.UNSIGNED_BYTE, values.length)) - 1;
+                        const sampler = glTFAnimation.samplers.push({ input, output, interpolation: AnimationSamplerInterpolation.STEP }) - 1;
+                        const extensionName = "KHR_animation_pointer";
+                        glTFAnimation.channels.push({
+                            sampler,
+                            target: { path: AnimationChannelTargetPath.POINTER, extensions: { [extensionName]: { pointer: `/nodes/${nodeIndex}/visible` } } },
+                        });
+                        onVisibilityExported?.(nodeIndex);
+                    } else if (this._IsTransformable(target) || (target.length === 1 && this._IsTransformable(target[0]))) {
                         const animationInfo = _GLTFAnimation._DeduceAnimationInfo(targetAnimation.animation);
                         if (animationInfo) {
                             const babylonTransformNode = this._IsTransformable(target) ? target : this._IsTransformable(target[0]) ? target[0] : null;

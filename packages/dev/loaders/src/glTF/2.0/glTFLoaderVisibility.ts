@@ -2,6 +2,7 @@ import { type Node } from "core/node";
 import { type INode } from "./glTFLoaderInterfaces";
 
 const NodeVisibility = new WeakMap<Node, NonNullable<INode["_visibility"]>>();
+const VisibilityAnimationTargets = new WeakMap<object, INode>();
 
 /**
  * Gets the current local glTF visibility of an authored node, independently of its ancestors.
@@ -10,6 +11,21 @@ const NodeVisibility = new WeakMap<Node, NonNullable<INode["_visibility"]>>();
  */
 export function GetGLTFNodeVisibility(node: Node): boolean | undefined {
     return NodeVisibility.get(node)?.local;
+}
+
+/**
+ * Gets the authored node associated with a loaded visibility animation target.
+ * @param target A targeted animation's target
+ * @returns The authored node, or undefined for other targets
+ */
+export function GetGLTFVisibilityAnimationTarget(target: unknown): Node | undefined {
+    const node = target && typeof target === "object" ? VisibilityAnimationTargets.get(target) : undefined;
+    return node?._babylonTransformNodeForSkin ?? node?._babylonTransformNode;
+}
+
+/** @internal */
+export function RegisterGLTFVisibilityAnimationTarget(target: object, node: INode): void {
+    VisibilityAnimationTargets.set(target, node);
 }
 
 /** @internal */

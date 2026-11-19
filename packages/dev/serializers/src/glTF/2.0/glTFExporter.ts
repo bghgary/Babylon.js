@@ -250,8 +250,10 @@ export class GLTFExporter {
      */
     private _animationSampleRate: number;
 
-    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds">> &
-        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds">;
+    private readonly _options: Required<
+        Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds" | "nodeVisibilityAnimationTarget">
+    > &
+        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds" | "nodeVisibilityAnimationTarget">;
 
     public _shouldUseGlb: boolean = false;
 
@@ -465,6 +467,9 @@ export class GLTFExporter {
         }
         if (this._options.nodeVisibility && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting node visibility requires glTF 2.1.");
+        }
+        if (this._options.nodeVisibilityAnimationTarget && !this._options.nodeVisibility) {
+            throw new Error("Exporting visibility animation requires nodeVisibility.");
         }
         if (this._options.nodeBoundingVolume && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting a bounding volume requires glTF 2.1.");
@@ -1053,7 +1058,19 @@ export class GLTFExporter {
                 this._animationSampleRate,
                 stateLH.getNodesSet(),
                 this._options.shouldExportAnimation,
-                this._animationGroupMap
+                this._animationGroupMap,
+                this._options.nodeVisibilityAnimationTarget,
+                (nodeIndex) => {
+                    this._nodes[nodeIndex].visible ??= true;
+                    const used = (this._glTF.extensionsUsed ??= []);
+                    const required = (this._glTF.extensionsRequired ??= []);
+                    if (!used.includes("KHR_animation_pointer")) {
+                        used.push("KHR_animation_pointer");
+                    }
+                    if (!required.includes("KHR_animation_pointer")) {
+                        required.push("KHR_animation_pointer");
+                    }
+                }
             );
         }
     }
