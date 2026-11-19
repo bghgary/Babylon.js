@@ -4,6 +4,7 @@ import { InternalTextureSource } from "core/Materials/Textures/internalTexture";
 import { Texture } from "core/Materials/Textures/texture";
 import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
 import { PBRMetallicRoughnessMaterial } from "core/Materials/PBR/pbrMetallicRoughnessMaterial";
+import { OpenPBRMaterial } from "core/Materials/PBR/openpbrMaterial";
 import { Color3 } from "core/Maths/math.color";
 import { CreateBox } from "core/Meshes/Builders/boxBuilder";
 import { Tools } from "core/Misc/tools";
@@ -256,6 +257,55 @@ describe("glTF Exporter - material properties", () => {
 
         expect(exported.emissiveFactor).toEqual([0.25, 0.5, 1]);
         expect(extension.emissiveStrength).toBeCloseTo(3);
+    });
+
+    it("exports emissive intensity as a core glTF 2.1 property", async () => {
+        const box = CreateBox("box", {}, testScene.scene);
+        const material = new PBRMaterial("material", testScene.scene);
+        material.metallic = 0;
+        material.roughness = 1;
+        material.emissiveColor = new Color3(0.25, 0.5, 1);
+        material.emissiveIntensity = 3;
+        box.material = material;
+
+        const gltf = await ExportGltfAsync(testScene.scene, { gltfVersion: "2.1" });
+        const exported = gltf.materials[0];
+
+        expect(exported.emissiveFactor).toEqual([0.25, 0.5, 1]);
+        expect(exported.emissiveStrength).toBeCloseTo(3);
+        expect(exported.extensions?.KHR_materials_emissive_strength).toBeUndefined();
+        expect(gltf.extensionsUsed ?? []).not.toContain("KHR_materials_emissive_strength");
+    });
+
+    it.each([
+        { color: new Color3(0.5, 0.25, 0), intensity: 0, factor: [0.5, 0.25, 0], strength: 0 },
+        { color: new Color3(2, 1, 0.5), intensity: 0.25, factor: [1, 0.5, 0.25], strength: 0.5 },
+    ])("preserves core emissive color and intensity", async ({ color, intensity, factor, strength }) => {
+        const box = CreateBox("box", {}, testScene.scene);
+        const material = new PBRMaterial("material", testScene.scene);
+        material.metallic = 0;
+        material.roughness = 1;
+        material.emissiveColor = color;
+        material.emissiveIntensity = intensity;
+        box.material = material;
+
+        const gltf = await ExportGltfAsync(testScene.scene, { gltfVersion: "2.1" });
+
+        expect(gltf.materials[0].emissiveFactor).toEqual(factor);
+        expect(gltf.materials[0].emissiveStrength).toBe(strength);
+    });
+
+    it("exports OpenPBR emission luminance as core emissive strength", async () => {
+        const box = CreateBox("box", {}, testScene.scene);
+        const material = new OpenPBRMaterial("material", testScene.scene);
+        material.emissionColor = new Color3(0.25, 0.5, 1);
+        material.emissionLuminance = 3;
+        box.material = material;
+
+        const gltf = await ExportGltfAsync(testScene.scene, { gltfVersion: "2.1" });
+
+        expect(gltf.materials[0].emissiveFactor).toEqual([0.25, 0.5, 1]);
+        expect(gltf.materials[0].emissiveStrength).toBe(3);
     });
 
     // https://forum.babylonjs.com/t/the-gltf2exported-glb-doesnt-contain-the-assigned-pbrmetallicroughnessmaterial-in-newer-versions/59353

@@ -43,9 +43,36 @@ describe("glTF exporter", () => {
             const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
 
             expect(gltf.asset.version).toBe("2.0");
+            expect(gltf.asset.minVersion).toBeUndefined();
             expect(gltf.buffers).toHaveLength(1);
             expect(gltf.buffers[0].uri).toBe("model.bin");
             expect(GetBlobFile(data.files["model.bin"]).size).toBe(gltf.buffers[0].byteLength);
+        });
+
+        it("writes glTF 2.1 only when requested", async () => {
+            CreateBox("box", {}, testScene.scene);
+
+            const defaultGltf = await ExportGltfAsync(testScene.scene, { gltfVersion: undefined });
+            const gltf = await ExportGltfAsync(testScene.scene, { gltfVersion: "2.1" });
+
+            expect(defaultGltf.asset.version).toBe("2.0");
+            expect(gltf.asset).toMatchObject({ version: "2.1", minVersion: "2.1" });
+        });
+
+        it("rejects unsupported export versions", async () => {
+            // @ts-expect-error Unsupported versions can be supplied by JavaScript callers.
+            await expect(GLTF2Export.GLTFAsync(testScene.scene, "model", { gltfVersion: "3.0" })).rejects.toThrow("Unsupported glTF export version: 3.0");
+        });
+
+        it("writes glTF 2.1 in a binary container", async () => {
+            CreateBox("box", {}, testScene.scene);
+            const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { gltfVersion: "2.1", exportWithoutWaitingForScene: true });
+            const glb = new DataView(await GetBlobFile(data.files["model.glb"]).arrayBuffer());
+            const jsonLength = glb.getUint32(12, true);
+            const gltf = ParseGltfJson(new TextDecoder().decode(new Uint8Array(glb.buffer, 20, jsonLength)));
+
+            expect(glb.getUint32(4, true)).toBe(2);
+            expect(gltf.asset).toMatchObject({ version: "2.1", minVersion: "2.1" });
         });
 
         it("writes a binary glTF with a JSON chunk followed by a BIN chunk", async () => {

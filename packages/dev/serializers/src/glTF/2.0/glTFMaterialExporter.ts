@@ -1000,7 +1000,16 @@ export class GLTFMaterialExporter {
 
         const emissiveColor = babylonPBRMaterial instanceof PBRBaseMaterial ? babylonPBRMaterial._emissiveColor : babylonPBRMaterial.emissionColor;
         if (!emissiveColor.equalsWithEpsilon(Black, Epsilon)) {
-            glTFMaterial.emissiveFactor = emissiveColor.asArray();
+            if (this._exporter.options.gltfVersion === "2.1") {
+                const colorScale = Math.max(1, emissiveColor.r, emissiveColor.g, emissiveColor.b);
+                const intensity = babylonPBRMaterial instanceof PBRBaseMaterial ? babylonPBRMaterial._emissiveIntensity : babylonPBRMaterial.emissionLuminance;
+                glTFMaterial.emissiveFactor = emissiveColor.scale(1 / colorScale).asArray();
+                if (intensity * colorScale !== 1) {
+                    glTFMaterial.emissiveStrength = intensity * colorScale;
+                }
+            } else {
+                glTFMaterial.emissiveFactor = emissiveColor.asArray();
+            }
         }
 
         glTFMaterial.pbrMetallicRoughness = glTFPbrMetallicRoughness;

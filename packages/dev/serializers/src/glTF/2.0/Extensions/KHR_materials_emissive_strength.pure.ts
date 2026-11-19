@@ -15,12 +15,16 @@ export class KHR_materials_emissive_strength implements IGLTFExporterExtensionV2
     public readonly name = NAME;
 
     /** Defines whether this extension is enabled */
-    public enabled = true;
+    public enabled: boolean;
 
     /** Defines whether this extension is required */
     public required = false;
 
     private _wasUsed = false;
+
+    public constructor(exporter?: GLTFExporter) {
+        this.enabled = exporter?.options.gltfVersion !== "2.1";
+    }
 
     /** Dispose */
     public dispose() {}
@@ -39,7 +43,7 @@ export class KHR_materials_emissive_strength implements IGLTFExporterExtensionV2
      */
     public async postExportMaterialAsync(context: string, node: IMaterial, babylonMaterial: Material): Promise<IMaterial> {
         return await new Promise((resolve) => {
-            if (!(babylonMaterial instanceof PBRMaterial)) {
+            if (!this.enabled || !(babylonMaterial instanceof PBRMaterial)) {
                 return resolve(node);
             }
 
@@ -78,5 +82,5 @@ export function RegisterKHR_materials_emissive_strength(): void {
     }
     _Registered = true;
 
-    GLTFExporter.RegisterExtension(NAME, () => new KHR_materials_emissive_strength());
+    GLTFExporter.RegisterExtension(NAME, (exporter) => new KHR_materials_emissive_strength(exporter));
 }

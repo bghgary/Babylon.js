@@ -448,7 +448,16 @@ export class GLTFExporter {
             meshCompressionMethod: "None",
             khrInteractivity: undefined,
             ...options,
+            gltfVersion: options?.gltfVersion === undefined ? "2.0" : options.gltfVersion,
         };
+
+        if (this._options.gltfVersion !== "2.0" && this._options.gltfVersion !== "2.1") {
+            throw new Error(`Unsupported glTF export version: ${this._options.gltfVersion}`);
+        }
+        if (this._options.gltfVersion === "2.1") {
+            this._glTF.asset.version = "2.1";
+            this._glTF.asset.minVersion = "2.1";
+        }
 
         this._loadExtensions();
     }

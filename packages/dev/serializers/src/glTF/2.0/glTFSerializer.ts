@@ -90,6 +90,11 @@ export interface IKHRInteractivityExportProvider {
  */
 export interface IExportOptions {
     /**
+     * The glTF version to export. Defaults to "2.0".
+     */
+    gltfVersion?: "2.0" | "2.1";
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)
