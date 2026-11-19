@@ -252,9 +252,31 @@ export class GLTFExporter {
     private _animationSampleRate: number;
 
     private readonly _options: Required<
-        Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds" | "nodeVisibilityAnimationTarget">
+        Omit<
+            IExportOptions,
+            | "khrInteractivity"
+            | "thumbnail"
+            | "nodeVisibility"
+            | "nodeBoundingVolume"
+            | "uniqueIds"
+            | "nodeVisibilityAnimationTarget"
+            | "files"
+            | "externalAssets"
+            | "nodeExternalAsset"
+        >
     > &
-        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility" | "nodeBoundingVolume" | "uniqueIds" | "nodeVisibilityAnimationTarget">;
+        Pick<
+            IExportOptions,
+            | "khrInteractivity"
+            | "thumbnail"
+            | "nodeVisibility"
+            | "nodeBoundingVolume"
+            | "uniqueIds"
+            | "nodeVisibilityAnimationTarget"
+            | "files"
+            | "externalAssets"
+            | "nodeExternalAsset"
+        >;
 
     public _shouldUseGlb: boolean = false;
 
@@ -482,6 +504,9 @@ export class GLTFExporter {
         if ((this._options.uniqueIds || this._options.preserveNodeUniqueIds) && this._options.gltfVersion !== "2.1") {
             throw new Error("Exporting unique IDs requires glTF 2.1.");
         }
+        if ((this._options.files?.length || this._options.externalAssets?.length || this._options.nodeExternalAsset) && this._options.gltfVersion !== "2.1") {
+            throw new Error("Exporting external assets requires glTF 2.1.");
+        }
         if (this._options.thumbnail) {
             if (this._options.gltfVersion !== "2.1") {
                 throw new Error("Exporting a thumbnail requires glTF 2.1.");
@@ -595,6 +620,15 @@ export class GLTFExporter {
         if (this._images && this._images.length) {
             this._glTF.images = this._images;
         }
+
+        if (this._options.files?.length) {
+            this._glTF.files = this._options.files.map((file) => ({ ...file, aliases: file.aliases?.map((alias) => ({ ...alias })) }));
+        }
+        if (this._options.externalAssets?.length) {
+            this._glTF.externalAssets = this._options.externalAssets.map((asset) => ({ ...asset }));
+        }
+
+        this._validateExternalAssetReferences();
 
         if (this._glTF.shapes?.length) {
             if (this._options.gltfVersion !== "2.1") {
@@ -838,6 +872,35 @@ export class GLTFExporter {
             this._shapeMap.set(shape, shapeIndex);
         }
         return shapeIndex;
+    }
+
+    private _validateExternalAssetReferences(): void {
+        const files = this._glTF.files ?? [];
+        const externalAssets = this._glTF.externalAssets ?? [];
+        for (const [fileIndex, file] of files.entries()) {
+            const hasUri = typeof file.uri === "string" && file.uri.length > 0;
+            const hasBufferView = file.bufferView !== undefined;
+            if (!file.mimeType || hasUri === hasBufferView) {
+                throw new Error(`Invalid glTF file reference at index ${fileIndex}`);
+            }
+            if (hasBufferView && (!Number.isInteger(file.bufferView) || file.bufferView! < 0 || file.bufferView! >= (this._glTF.bufferViews?.length ?? 0))) {
+                throw new Error(`File reference at index ${fileIndex} points to a missing buffer view`);
+            }
+            for (const alias of file.aliases ?? []) {
+                if (!alias.alias || !Number.isInteger(alias.file) || alias.file < 0 || alias.file >= files.length) {
+                    throw new Error(`File reference at index ${fileIndex} has an invalid alias`);
+                }
+            }
+        }
+        for (const [assetIndex, asset] of externalAssets.entries()) {
+            const file = files[asset.file];
+            if (!Number.isInteger(asset.file) || asset.file < 0 || !file) {
+                throw new Error(`External asset at index ${assetIndex} references a missing file`);
+            }
+            if (file.mimeType !== "model/gltf+json" && file.mimeType !== "model/gltf-binary") {
+                throw new Error(`External asset at index ${assetIndex} must reference a glTF file`);
+            }
+        }
     }
 
     private _validateShapeMeshReferences(): void {
@@ -1192,7 +1255,8 @@ export class GLTFExporter {
             !this._options.nodeVisibility &&
             !this._options.nodeBoundingVolume &&
             !this._options.uniqueIds &&
-            !this._options.preserveNodeUniqueIds;
+            !this._options.preserveNodeUniqueIds &&
+            !this._options.nodeExternalAsset;
 
         if (this._options.nodeVisibility || this._options.nodeBoundingVolume) {
             const sceneNodes = this._babylonScene.getNodes();
@@ -1722,6 +1786,14 @@ export class GLTFExporter {
             node.visible = visible;
         }
 
+        const externalAsset = this._options.nodeExternalAsset?.(babylonNode);
+        if (externalAsset !== undefined) {
+            if (!Number.isInteger(externalAsset) || externalAsset < 0 || externalAsset >= (this._options.externalAssets?.length ?? 0)) {
+                throw new Error(`Invalid external asset index for node ${babylonNode.name}`);
+            }
+            node.externalAsset = externalAsset;
+        }
+
         const boundingVolume = this._options.nodeBoundingVolume?.(babylonNode);
         if (boundingVolume !== undefined) {
             if (!boundingVolume?.shape) {
@@ -1824,6 +1896,7 @@ export class GLTFExporter {
                     !this._options.nodeBoundingVolume &&
                     !this._options.uniqueIds &&
                     !this._options.preserveNodeUniqueIds &&
+                    !this._options.nodeExternalAsset &&
                     parentBabylonNode !== null &&
                     IsChildCollapsible(babylonNode, parentBabylonNode)
                 ) {

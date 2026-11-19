@@ -204,6 +204,46 @@ describe("glTF exporter", () => {
             await expect(exporter.generateGLTFAsync("model")).rejects.toThrow(/references a missing mesh/);
         });
 
+        it("writes file references and external assets for selected nodes", async () => {
+            const node = new TransformNode("external", testScene.scene);
+            const exporter = new GLTFExporter(testScene.scene, {
+                gltfVersion: "2.1",
+                exportWithoutWaitingForScene: true,
+                files: [
+                    { mimeType: "model/gltf+json", uri: "inner.gltf", aliases: [{ alias: "inner.bin", file: 1 }] },
+                    { mimeType: "application/gltf-buffer", uri: "inner.bin" },
+                ],
+                externalAssets: [{ file: 0 }],
+                nodeExternalAsset: (candidate) => (candidate === node ? 0 : undefined),
+            });
+
+            const data = await exporter.generateGLTFAsync("model");
+            const gltf = ParseGltfJson(GetTextFile(data.files["model.gltf"]));
+            expect(gltf.files).toEqual([
+                { mimeType: "model/gltf+json", uri: "inner.gltf", aliases: [{ alias: "inner.bin", file: 1 }] },
+                { mimeType: "application/gltf-buffer", uri: "inner.bin" },
+            ]);
+            expect(gltf.externalAssets).toEqual([{ file: 0 }]);
+            expect(gltf.nodes.find((entry) => entry.name === "external")?.externalAsset).toBe(0);
+        });
+
+        it("rejects invalid external asset references and glTF 2.0 options", async () => {
+            expect(
+                () =>
+                    new GLTFExporter(testScene.scene, {
+                        files: [{ mimeType: "model/gltf+json", uri: "inner.gltf" }],
+                    })
+            ).toThrow(/requires glTF 2.1/);
+
+            const exporter = new GLTFExporter(testScene.scene, {
+                gltfVersion: "2.1",
+                exportWithoutWaitingForScene: true,
+                files: [{ mimeType: "application/gltf-buffer", uri: "inner.bin" }],
+                externalAssets: [{ file: 0 }],
+            });
+            await expect(exporter.generateGLTFAsync("model")).rejects.toThrow(/must reference a glTF file/);
+        });
+
         it("writes a version 3 container for a glTF 2.0 asset without a chunk property", async () => {
             CreateBox("box", {}, testScene.scene);
             const data = await GLTF2Export.GLBAsync(testScene.scene, "model", { glbVersion: 3, exportWithoutWaitingForScene: true });
@@ -638,6 +678,22 @@ describe("glTF exporter", () => {
             });
             for (const name of ["camera", "light", "area"]) {
                 expect(bounded.nodes.find((node) => node.name === name)?.boundingVolume).toBeDefined();
+            }
+            const externalAssets = await ExportGltfAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                files: [{ mimeType: "model/gltf+json", uri: "nested.gltf" }],
+                externalAssets: [{ file: 0 }],
+                nodeExternalAsset: (node) => (node === camera || node === light || node === area ? 0 : undefined),
+            });
+            for (const [parentName, childName] of [
+                ["camera parent", "camera"],
+                ["light parent", "light"],
+                ["area parent", "area"],
+            ]) {
+                const parent = externalAssets.nodes.find((node) => node.name === parentName);
+                const child = externalAssets.nodes.find((node) => node.name === childName);
+                expect(child?.externalAsset).toBe(0);
+                expect(parent?.children?.map((index) => externalAssets.nodes[index].name)).toContain(childName);
             }
 
             const imported = CreateTestScene();

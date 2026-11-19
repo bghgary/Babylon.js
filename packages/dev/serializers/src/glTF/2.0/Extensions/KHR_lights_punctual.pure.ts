@@ -157,6 +157,7 @@ export class KHR_lights_punctual implements IGLTFExporterExtensionV2 {
                 !this._exporter.options.nodeBoundingVolume &&
                 !this._exporter.options.uniqueIds &&
                 !this._exporter.options.preserveNodeUniqueIds &&
+                !this._exporter.options.nodeExternalAsset &&
                 parentBabylonNode &&
                 IsChildCollapsible(babylonNode, parentBabylonNode)
             ) {

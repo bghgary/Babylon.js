@@ -4,7 +4,7 @@ import { type Animation } from "core/Animations/animation";
 import { type AnimationGroup } from "core/Animations/animationGroup";
 import { type Camera } from "core/Cameras/camera";
 import { type Material } from "core/Materials/material";
-import { type IGLTF, type IKHRInteractivity, type IShape } from "babylonjs-gltf2interface";
+import { type IExternalAsset, type IFile, type IGLTF, type IKHRInteractivity, type IShape } from "babylonjs-gltf2interface";
 import { type Quaternion, type Vector3 } from "core/Maths/math.vector";
 import { type GLTFData } from "./glTFData";
 import { GLTFExporter } from "./glTFExporter";
@@ -175,6 +175,23 @@ export interface IExportOptions {
     preserveNodeUniqueIds?: boolean;
 
     /**
+     * glTF 2.1 file references used by external assets.
+     */
+    files?: readonly IFile[];
+
+    /**
+     * glTF 2.1 external assets referenced by exported nodes.
+     */
+    externalAssets?: readonly IExternalAsset[];
+
+    /**
+     * Supplies the index in {@link externalAssets} for an exported node.
+     * @param node source Babylon node
+     * @returns external asset index, or undefined if the node does not reference one
+     */
+    nodeExternalAsset?(node: Node): number | undefined;
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)
@@ -213,7 +230,7 @@ export interface IExportOptions {
 
     /**
      * Remove no-op root nodes when possible. Defaults to true. No-op roots are preserved when
-     * {@link khrInteractivity}, {@link nodeVisibility}, {@link nodeBoundingVolume}, or {@link uniqueIds} is provided.
+     * {@link khrInteractivity}, {@link nodeVisibility}, {@link nodeBoundingVolume}, {@link uniqueIds}, or {@link nodeExternalAsset} is provided.
      */
     removeNoopRootNodes?: boolean;
 
