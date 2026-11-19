@@ -1,4 +1,16 @@
+import { type Node } from "core/node";
 import { type INode } from "./glTFLoaderInterfaces";
+
+const NodeVisibility = new WeakMap<Node, NonNullable<INode["_visibility"]>>();
+
+/**
+ * Gets the current local glTF visibility of an authored node, independently of its ancestors.
+ * @param node A Babylon node loaded from glTF
+ * @returns The local visibility, or undefined if the node has no glTF visibility state
+ */
+export function GetGLTFNodeVisibility(node: Node): boolean | undefined {
+    return NodeVisibility.get(node)?.local;
+}
 
 /** @internal */
 export function InitializeNodeVisibility(nodes: INode[], extensionEnabled: boolean): void {
@@ -10,6 +22,10 @@ export function InitializeNodeVisibility(nodes: INode[], extensionEnabled: boole
             hiddenNodes: new Map(),
             hiddenLights: new Map(),
         };
+        const target = node._babylonTransformNodeForSkin ?? node._babylonTransformNode;
+        if (target) {
+            NodeVisibility.set(target, node._visibility);
+        }
     }
     for (const node of nodes) {
         node.parent?._visibility?.children.push(node);

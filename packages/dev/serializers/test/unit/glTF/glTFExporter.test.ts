@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Vector3 } from "core/Maths/math.vector";
 import { TransformNode } from "core/Meshes/transformNode";
+import { FreeCamera } from "core/Cameras/freeCamera";
+import { PointLight } from "core/Lights/pointLight";
+import { RectAreaLight } from "core/Lights/rectAreaLight";
 import { CreateBox } from "core/Meshes/Builders/boxBuilder";
 import { Mesh } from "core/Meshes/mesh";
 import { SubMesh } from "core/Meshes/subMesh";
@@ -12,6 +15,10 @@ import { type IAccessor, type ICamera } from "babylonjs-gltf2interface";
 import { GLTF2Export } from "serializers/glTF/2.0";
 import { DataWriter } from "serializers/glTF/2.0/dataWriter";
 import { GLTFLoader } from "loaders/glTF/2.0/glTFLoader.pure";
+import { GLTFFileLoader } from "loaders/glTF/glTFFileLoader.pure";
+import { type IGLTF as IRuntimeGLTF } from "loaders/glTF/2.0/glTFLoaderInterfaces";
+import { GetGLTFNodeVisibility } from "loaders/glTF/2.0/glTFLoaderVisibility";
+import { GetPathToObjectConverter } from "loaders/glTF/2.0/Extensions/objectModelMapping";
 import {
     CreateTestScene,
     CreateTriangleGltf,
@@ -249,6 +256,243 @@ describe("glTF exporter", () => {
             const gltf = await ExportGltfAsync(testScene.scene, { shouldExportNode: (node) => node !== skipped });
 
             expect(gltf.nodes.map((n) => n.name)).toEqual([kept.name]);
+        });
+
+        it("exports explicitly selected hierarchical node visibility", async () => {
+            const hidden = new TransformNode("hidden", testScene.scene);
+            const child = CreateBox("child", {}, testScene.scene);
+            child.parent = hidden;
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeVisibility: (node) => (node === hidden ? false : node === child ? true : undefined),
+            });
+
+            const exportedParent = gltf.nodes.find((node) => node.name === "hidden");
+            const exportedChild = gltf.nodes.find((node) => node.name === "child");
+            expect(exportedParent?.visible).toBe(false);
+            expect(exportedChild?.visible).toBe(true);
+            expect(exportedParent?.children?.map((index) => gltf.nodes[index].name)).toContain("child");
+
+            const imported = CreateTestScene();
+            try {
+                gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+                await ImportGltfAsync(imported.scene, gltf);
+                expect(imported.scene.getMeshByName("child")?.isVisible).toBe(false);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("rejects node visibility when exporting glTF 2.0", async () => {
+            await expect(ExportGltfAsync(testScene.scene, { nodeVisibility: () => false })).rejects.toThrow(/visibility.*2.1/i);
+        });
+
+        it("rejects invalid authored node visibility", async () => {
+            new TransformNode("node", testScene.scene);
+            // @ts-expect-error JavaScript callers can supply a non-boolean value.
+            await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: () => null })).rejects.toThrow(/invalid visibility/i);
+        });
+
+        it("round trips loaded local visibility independently of inherited visibility", async () => {
+            const source = CreateTriangleGltf();
+            source.asset = { version: "2.1", minVersion: "2.1" };
+            source.nodes = [
+                { name: "parent", visible: false, children: [1] },
+                { name: "triangle", mesh: 0, visible: true },
+            ];
+            const gltf = await RoundTripGltfAsync(testScene.scene, source, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility });
+            expect(gltf.nodes.find((node) => node.name === "parent")?.visible).toBe(false);
+            expect(gltf.nodes.find((node) => node.name === "triangle")?.visible).toBe(true);
+        });
+
+        it.each([
+            ["sibling", false, false],
+            ["self", false, false],
+            ["child", false, false],
+            ["sibling", true, false],
+            ["self", true, false],
+            ["child", true, false],
+            ["sibling", false, true],
+            ["child", true, true],
+        ])("preserves visibility and skinning with a %s joint, right-handed: %s, multiple primitives: %s", async (jointLocation, rightHanded, multiple) => {
+            testScene.scene.useRightHandedSystem = rightHanded;
+            const source = CreateTriangleGltf();
+            const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+            const joints = new Uint8Array(12);
+            const weights = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+            const times = new Float32Array([0, 1]);
+            const translations = new Float32Array([2, 0, 0, 3, 0, 0]);
+            source.asset = { version: "2.1", minVersion: "2.1" };
+            source.scenes[0].nodes = [0];
+            source.nodes = [
+                { name: "parent", visible: false, translation: [5, 0, 0], children: jointLocation === "child" ? [1] : [1, 2] },
+                { name: "skinned", mesh: 0, skin: 0, translation: [2, 0, 0], children: jointLocation === "child" ? [2] : undefined },
+                { name: "joint" },
+            ];
+            source.skins = [jointLocation === "self" ? { joints: [1], skeleton: 1 } : { joints: [2], skeleton: 2 }];
+            const primitive = { attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 } };
+            source.meshes = [{ primitives: multiple ? [primitive, structuredClone(primitive)] : [primitive] }];
+            source.accessors = [
+                { bufferView: 0, componentType: 5126, count: 3, type: "VEC3" as IAccessor["type"], min: [0, 0, 0], max: [1, 1, 0] },
+                { bufferView: 1, componentType: 5121, count: 3, type: "VEC4" as IAccessor["type"] },
+                { bufferView: 2, componentType: 5126, count: 3, type: "VEC4" as IAccessor["type"] },
+                { bufferView: 3, componentType: 5126, count: 2, type: "SCALAR" as IAccessor["type"], min: [0], max: [1] },
+                { bufferView: 4, componentType: 5126, count: 2, type: "VEC3" as IAccessor["type"] },
+            ];
+            source.bufferViews = [
+                { buffer: 0, byteLength: 36 },
+                { buffer: 0, byteOffset: 36, byteLength: 12 },
+                { buffer: 0, byteOffset: 48, byteLength: 48 },
+                { buffer: 0, byteOffset: 96, byteLength: 8 },
+                { buffer: 0, byteOffset: 104, byteLength: 24 },
+            ];
+            source.buffers = [{ byteLength: 128, uri: ToDataUri(positions, joints, weights, times, translations) }];
+            source.animations = [{ samplers: [{ input: 3, output: 4 }], channels: [{ sampler: 0, target: { node: 1, path: "translation" } }] }];
+            await ImportGltfAsync(testScene.scene, source);
+            const meshName = multiple ? "skinned_primitive0" : "skinned";
+            const sourceMesh = testScene.scene.getMeshByName(meshName);
+            if (!sourceMesh) {
+                throw new Error("Expected imported skinned mesh");
+            }
+            const sourceGroup = testScene.scene.animationGroups[0];
+            sourceGroup.start(false);
+            sourceGroup.goToFrame(sourceGroup.from);
+            const sourceVertex = () => {
+                testScene.scene.skeletons[0].prepare(true);
+                return Vector3.TransformCoordinates(Vector3.FromArray(sourceMesh.getPositionData(true)!), sourceMesh.computeWorldMatrix(true));
+            };
+            const sourcePosition = sourceVertex();
+            sourceGroup.goToFrame(sourceGroup.to);
+            const animatedPosition = sourceVertex();
+            sourceGroup.goToFrame(sourceGroup.from);
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility });
+            gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+            const imported = CreateTestScene();
+            imported.scene.useRightHandedSystem = rightHanded;
+            try {
+                const container = await new GLTFFileLoader().loadAssetContainerAsync(imported.scene, { json: gltf }, "");
+                const mesh = container.meshes.find((entry) => entry.name === meshName);
+                expect(mesh?.isVisible).toBe(false);
+                if (multiple) {
+                    expect(container.meshes.find((entry) => entry.name === "skinned_primitive1")?.isVisible).toBe(false);
+                }
+                if (!mesh) {
+                    throw new Error("Expected reimported skinned mesh");
+                }
+                container.skeletons[0].prepare(true);
+                const position = Vector3.TransformCoordinates(Vector3.FromArray(mesh.getPositionData(true)!), mesh.computeWorldMatrix(true));
+                expect(Vector3.Distance(position, sourcePosition)).toBeLessThan(1e-5);
+                const parentIndex = gltf.nodes.findIndex((node) => node.name === "parent");
+                const parent = GetPathToObjectConverter(gltf as IRuntimeGLTF).convert(`/nodes/${parentIndex}/visible`);
+                parent.info.set!(true, parent.object);
+                expect(mesh?.isVisible).toBe(true);
+                if (multiple) {
+                    expect(container.meshes.find((entry) => entry.name === "skinned_primitive1")?.isVisible).toBe(true);
+                }
+                const group = container.animationGroups[0];
+                group.start(false);
+                group.goToFrame(group.to);
+                container.skeletons[0].prepare(true);
+                const animated = Vector3.TransformCoordinates(Vector3.FromArray(mesh.getPositionData(true)!), mesh.computeWorldMatrix(true));
+                expect(Vector3.Distance(animated, animatedPosition)).toBeLessThan(1e-5);
+                if (jointLocation === "sibling" && rightHanded && !multiple) {
+                    sourceMesh.parent = new TransformNode("new parent", testScene.scene);
+                    await expect(ExportGltfAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility })).rejects.toThrow(/hierarchy has changed/i);
+                }
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("preserves imported camera direction when retaining nodes for visibility", async () => {
+            const source = CreateTriangleGltf();
+            source.asset = { version: "2.1", minVersion: "2.1" };
+            source.nodes.push({ name: "camera node", camera: 0, translation: [2, 1, 3], rotation: [0, 0.38268343, 0, 0.92387953] });
+            source.scenes[0].nodes.push(1);
+            source.cameras = [{ name: "camera", type: "perspective" as ICamera["type"], perspective: { yfov: 1, znear: 0.1 } }];
+            await ImportGltfAsync(testScene.scene, source);
+            const camera = testScene.scene.getCameraByName("camera");
+            if (!camera) {
+                throw new Error("Expected imported camera");
+            }
+            const direction = camera.getDirection(Vector3.Forward());
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: GetGLTFNodeVisibility });
+            gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+            const imported = CreateTestScene();
+            try {
+                await ImportGltfAsync(imported.scene, gltf);
+                const roundTripCamera = imported.scene.getCameraByName("camera");
+                if (!roundTripCamera) {
+                    throw new Error("Expected reimported camera");
+                }
+                expect(Vector3.Distance(roundTripCamera.getDirection(Vector3.Forward()), direction)).toBeLessThan(1e-5);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("preserves camera and light nodes when authored visibility is supplied", async () => {
+            testScene.scene.useRightHandedSystem = true;
+            const cameraParent = new TransformNode("camera parent", testScene.scene);
+            const camera = new FreeCamera("camera", Vector3.Zero(), testScene.scene);
+            camera.parent = cameraParent;
+            const lightParent = new TransformNode("light parent", testScene.scene);
+            const light = new PointLight("light", Vector3.Zero(), testScene.scene);
+            light.parent = lightParent;
+            const areaParent = new TransformNode("area parent", testScene.scene);
+            const area = new RectAreaLight("area", Vector3.Zero(), 1, 1, testScene.scene);
+            area.parent = areaParent;
+
+            const gltf = await ExportGltfAsync(testScene.scene, {
+                gltfVersion: "2.1",
+                nodeVisibility: (node) => (node === camera || node === light || node === area ? false : undefined),
+            });
+            for (const [parentName, childName] of [
+                ["camera parent", "camera"],
+                ["light parent", "light"],
+                ["area parent", "area"],
+            ]) {
+                const parent = gltf.nodes.find((node) => node.name === parentName);
+                const child = gltf.nodes.find((node) => node.name === childName);
+                expect(child?.visible).toBe(false);
+                expect(parent?.children?.map((index) => gltf.nodes[index].name)).toContain(childName);
+            }
+
+            const imported = CreateTestScene();
+            try {
+                await ImportGltfAsync(imported.scene, gltf);
+                expect(imported.scene.getCameraByName("camera")).not.toBeNull();
+                expect(imported.scene.getLightByName("light")?.isEnabled()).toBe(false);
+                expect(imported.scene.getLightByName("area")?.isEnabled()).toBe(false);
+            } finally {
+                imported.dispose();
+            }
+        });
+
+        it("preserves imported coordinates when retaining roots for node visibility", async () => {
+            const source = CreateTriangleGltf();
+            source.nodes[0].translation = [1, 2, 3];
+            await ImportGltfAsync(testScene.scene, source);
+            const sourceMesh = testScene.scene.getMeshByName("triangle");
+            if (!sourceMesh) {
+                throw new Error("Expected imported triangle");
+            }
+            const sourcePosition = Vector3.TransformCoordinates(Vector3.FromArray(sourceMesh.getVerticesData("position")!, 3), sourceMesh.computeWorldMatrix(true));
+            const { gltf, bin } = await ExportGltfWithBinaryAsync(testScene.scene, { gltfVersion: "2.1", nodeVisibility: () => undefined });
+            gltf.buffers[0].uri = ToDataUri(new Uint8Array(bin));
+
+            const imported = CreateTestScene();
+            try {
+                await ImportGltfAsync(imported.scene, gltf);
+                const mesh = imported.scene.getMeshByName("triangle");
+                if (!mesh) {
+                    throw new Error("Expected reimported triangle");
+                }
+                const position = Vector3.TransformCoordinates(Vector3.FromArray(mesh.getVerticesData("position")!, 3), mesh.computeWorldMatrix(true));
+                expect(Vector3.Distance(position, sourcePosition)).toBeLessThan(1e-5);
+            } finally {
+                imported.dispose();
+            }
         });
     });
 

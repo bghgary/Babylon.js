@@ -105,6 +105,17 @@ export interface IExportOptions {
     thumbnail?: Blob;
 
     /**
+     * Supplies authored glTF visibility for exported nodes. False hides a node's visual
+     * features and those of all descendants, but not cameras. Undefined uses the default.
+     * Babylon's `isVisible` does not have the same hierarchy semantics; for loaded glTF
+     * nodes, `GetGLTFNodeVisibility` from the loaders package returns the current local value.
+     * Requires glTF 2.1. Imported skinned meshes cannot be reparented before export.
+     * @param node source Babylon node
+     * @returns authored visibility, or undefined for the glTF default
+     */
+    nodeVisibility?(node: Node): boolean | undefined;
+
+    /**
      * Function which indicates whether a babylon node should be exported or not
      * @param node source Babylon node. It is used to check whether it should be exported to glTF or not
      * @returns boolean, which indicates whether the node should be exported (true) or not (false)
@@ -143,7 +154,7 @@ export interface IExportOptions {
 
     /**
      * Remove no-op root nodes when possible. Defaults to true. No-op roots are preserved when
-     * {@link khrInteractivity} is provided because the graph may reference them.
+     * {@link khrInteractivity} or {@link nodeVisibility} is provided because they may reference them.
      */
     removeNoopRootNodes?: boolean;
 

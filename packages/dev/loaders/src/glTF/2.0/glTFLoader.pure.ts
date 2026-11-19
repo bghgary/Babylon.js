@@ -1345,6 +1345,10 @@ export class GLTFLoader implements IGLTFLoader {
                                         babylonTransformNode.parent = this._rootBabylonMesh;
                                     }
 
+                                    const metadata = (babylonTransformNode._internalMetadata ??= {});
+                                    const gltfMetadata = (metadata.gltf ??= {});
+                                    gltfMetadata.skinSource = { node: babylonTransformNodeForSkin, parent: babylonTransformNode.parent };
+
                                     this._parent.onSkinLoadedObservable.notifyObservers({ node: babylonTransformNodeForSkin, skinnedNode: babylonTransformNode });
                                 });
                             })

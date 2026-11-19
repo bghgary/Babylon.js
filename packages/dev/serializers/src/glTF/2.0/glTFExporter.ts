@@ -249,7 +249,8 @@ export class GLTFExporter {
      */
     private _animationSampleRate: number;
 
-    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail">> & Pick<IExportOptions, "khrInteractivity" | "thumbnail">;
+    private readonly _options: Required<Omit<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility">> &
+        Pick<IExportOptions, "khrInteractivity" | "thumbnail" | "nodeVisibility">;
 
     public _shouldUseGlb: boolean = false;
 
@@ -260,6 +261,8 @@ export class GLTFExporter {
     public readonly _bufferManager = new BufferManager();
 
     private readonly _shouldExportNodeMap = new Map<Node, boolean>();
+    private readonly _skinnedNodeOwners = new Map<Node, Node>();
+    private readonly _skinnedNodeChildren = new Map<Node, Node[]>();
 
     // Babylon node -> glTF node index
     private readonly _nodeMap = new Map<Node, number>();
@@ -457,6 +460,9 @@ export class GLTFExporter {
         }
         if (this._options.glbVersion !== 2 && this._options.glbVersion !== 3) {
             throw new Error(`Unsupported binary glTF container version: ${this._options.glbVersion}`);
+        }
+        if (this._options.nodeVisibility && this._options.gltfVersion !== "2.1") {
+            throw new Error("Exporting node visibility requires glTF 2.1.");
         }
         if (this._options.thumbnail) {
             if (this._options.gltfVersion !== "2.1") {
@@ -928,7 +934,28 @@ export class GLTFExporter {
         const rootNodesRH = new Array<Node>();
         const rootNodesLH = new Array<Node>();
         const rootNoopNodesRH = new Array<Node>();
-        const removeNoopRootNodes = this._options.removeNoopRootNodes && !this._options.khrInteractivity;
+        const removeNoopRootNodes = this._options.removeNoopRootNodes && !this._options.khrInteractivity && !this._options.nodeVisibility;
+
+        if (this._options.nodeVisibility) {
+            const sceneNodes = this._babylonScene.getNodes();
+            const nodeSet = new Set(sceneNodes);
+            for (const babylonNode of sceneNodes) {
+                const source: { node: Node; parent: Nullable<Node> } | undefined = babylonNode._internalMetadata?.gltf?.skinSource;
+                if (!source) {
+                    continue;
+                }
+                if (!nodeSet.has(source.node)) {
+                    throw new Error(`Cannot export visibility for skinned node ${babylonNode.name}: its authored node is missing.`);
+                }
+                if (babylonNode.parent !== source.parent || source.node === babylonNode || source.node.isDescendantOf(babylonNode)) {
+                    throw new Error(`Cannot export visibility for skinned node ${babylonNode.name}: its hierarchy has changed since loading.`);
+                }
+                this._skinnedNodeOwners.set(babylonNode, source.node);
+                const children = this._skinnedNodeChildren.get(source.node) ?? [];
+                children.push(babylonNode);
+                this._skinnedNodeChildren.set(source.node, children);
+            }
+        }
 
         // Collect root nodes targeted by animation groups so we preserve them during noop removal.
         let animGroupTargets: Set<Node> | undefined;
@@ -1320,7 +1347,10 @@ export class GLTFExporter {
      * @returns A promise that resolves once the node has been exported
      * @internal
      */
-    private async _exportNodeAsync(babylonNode: Node, parentNodeChildren: Array<number>, state: ExporterState): Promise<void> {
+    private async _exportNodeAsync(babylonNode: Node, parentNodeChildren: Array<number>, state: ExporterState, fromSkinOwner = false): Promise<void> {
+        if (!fromSkinOwner && this._skinnedNodeOwners.has(babylonNode)) {
+            return;
+        }
         let nodeIndex = this._nodeMap.get(babylonNode);
         if (nodeIndex !== undefined) {
             if (!parentNodeChildren.includes(nodeIndex)) {
@@ -1393,6 +1423,10 @@ export class GLTFExporter {
             // eslint-disable-next-line no-await-in-loop
             await this._exportNodeAsync(babylonChildNode, children, state);
         }
+        for (const skinnedNode of this._skinnedNodeChildren.get(babylonNode) ?? []) {
+            // eslint-disable-next-line no-await-in-loop
+            await this._exportNodeAsync(skinnedNode, children, state, true);
+        }
 
         if (node && children.length) {
             node.children = children;
@@ -1409,6 +1443,14 @@ export class GLTFExporter {
         }
 
         const node: INode = {};
+
+        if (this._options.nodeVisibility) {
+            const visible = this._options.nodeVisibility(babylonNode);
+            if (visible !== undefined && typeof visible !== "boolean") {
+                throw new Error(`Invalid visibility for node ${babylonNode.name}`);
+            }
+            node.visible = visible;
+        }
 
         if (babylonNode.name) {
             node.name = babylonNode.name;
@@ -1457,7 +1499,7 @@ export class GLTFExporter {
 
                 // If a parent node exists and can be collapsed, merge their transformations and mark the parent as the camera-containing node.
                 const parentBabylonNode = babylonNode.parent;
-                if (parentBabylonNode !== null && IsChildCollapsible(babylonNode, parentBabylonNode)) {
+                if (!this._options.nodeVisibility && parentBabylonNode !== null && IsChildCollapsible(babylonNode, parentBabylonNode)) {
                     const parentNodeIndex = this._nodeMap.get(parentBabylonNode);
                     if (parentNodeIndex !== undefined) {
                         const parentNode = this._nodes[parentNodeIndex];
